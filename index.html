@@ -387,8 +387,9 @@ const CPP_FS0    = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/se
 
 /* Shared, server-collected state (GitHub Action commits this ~every 15 min) so
    every visitor sees the same trends. If it isn't reachable yet, the page falls
-   back to fetching the live feeds directly in this browser. */
-const STATE_URL = "https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/claude/first-energy-restoration-tracker-m185by/data/state.json";
+   back to fetching the live feeds directly in this browser. The data lives on a
+   dedicated 'tracker-data' branch so frequent data commits don't churn the page. */
+const STATE_URL = "https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/tracker-data/state.json";
 let sharedMode = false;
 
 /* Canonical Northeast Ohio counties + serving FirstEnergy utility (feed names are UPPER) */
