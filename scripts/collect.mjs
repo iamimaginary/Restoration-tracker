@@ -17,16 +17,37 @@ const CAP_TOTAL = 1500, CAP_COUNTY = 1000, CAP_CITY = 96, MAX_CITIES = 300;
 const RESET_AFTER_MS = 24 * 60 * 60 * 1000;   // 0 customers out for 24h -> archive + reset
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
-const jget = async (url) => { const r = await fetch(url); if(!r.ok) throw new Error(url.split("/").slice(2,3)+" "+r.status); return r.json(); };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Look like a browser and retry — FirstEnergy's CDN (KUBRA) intermittently 403s
+// requests from datacenter IPs / non-browser clients.
+const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
+async function jget(url, extraHeaders = {}){
+  const headers = { "User-Agent": UA, "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "en-US,en;q=0.9", ...extraHeaders };
+  let lastErr;
+  for(let attempt = 1; attempt <= 4; attempt++){
+    try {
+      const r = await fetch(url, { headers });
+      if(r.ok) return await r.json();
+      lastErr = new Error(url.split("/")[2] + " " + r.status);
+      // retry on 403/429/5xx (transient/bot-protection); give up on other 4xx
+      if(!(r.status === 403 || r.status === 429 || r.status >= 500)) break;
+    } catch(e){ lastErr = e; }
+    await sleep(700 * attempt + Math.random() * 400);
+  }
+  throw lastErr;
+}
+const KUBRA_HEADERS = { "Referer": "https://outages-oh.firstenergycorp.com/", "Origin": "https://outages-oh.firstenergycorp.com" };
 const pushCapped = (arr, point, cap) => { arr.push(point); while(arr.length > cap) arr.shift(); return arr; };
 
 async function fetchFE(){
-  const cs = await jget(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/currentState?preview=false`);
+  const cs = await jget(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/currentState?preview=false`, KUBRA_HEADERS);
   const dataPath = cs.data.interval_generation_data, dep = cs.stormcenterDeploymentId;
-  const conf = await jget(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/configuration/${dep}?preview=false`);
+  const conf = await jget(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/configuration/${dep}?preview=false`, KUBRA_HEADERS);
   const reps = conf.config.reports.data.interval_generation_data;
   const src = (reps.find(r=>/report\.json$/i.test(r.source)) || reps[0]).source;
-  const report = await jget(`${KB}/${dataPath}/${src}`);
+  const report = await jget(`${KB}/${dataPath}/${src}`, KUBRA_HEADERS);
   const st = report.file_data.areas[0];
   const counties = (st.areas||[]).map(c => ({
     name: c.name,
