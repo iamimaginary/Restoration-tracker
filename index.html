@@ -85,6 +85,10 @@
   .banner { border:1px solid var(--line); border-radius:12px; padding:11px 14px; margin-bottom:18px; font-size:13px; display:none; align-items:center; gap:10px; }
   .banner.show { display:flex; }
   .banner.error { background: rgba(231,76,60,.1); border-color: rgba(231,76,60,.35); color:#ffb4ab; }
+  .wx-banner { display:flex; gap:10px; align-items:flex-start; background: rgba(52,152,219,.1); border:1px solid rgba(52,152,219,.35);
+    border-left:3px solid var(--blue); color:#bfe0f5; border-radius:var(--r-md); padding:10px 14px; margin-bottom:18px; font-size:12.5px; line-height:1.5; }
+  .wx-banner b { color:#dcefff; }
+  .wx-banner .wx-ev { display:inline-block; }
 
   .movers { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
   .mv-h { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; margin-bottom:8px; }
@@ -237,6 +241,7 @@
   .rl-score { text-align:right; display:flex; flex-direction:column; line-height:1.2; font-variant-numeric:tabular-nums; }
   .rl-score b { font-weight:800; }
   .rl-score small { color:var(--muted); font-size:10px; }
+  .rl-blue { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .dlabel { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; color:var(--muted); margin:2px 0 7px; }
   .dlabel span { text-transform:none; letter-spacing:0; font-weight:400; }
   .trend-line { display:flex; align-items:center; gap:10px; margin-top:8px; }
@@ -290,6 +295,7 @@
     In a downed-line or life-threatening emergency, call 911.</span>
   </div>
 
+  <div id="weatherBanner"></div>
   <div class="banner" id="banner" role="alert"></div>
 
   <section class="summary" id="summary">
@@ -399,6 +405,11 @@
   power (an ASAI-style measure) — graded A+ to F, alongside how often it has any outage and its worst severity
   seen. It's built only from the collected snapshots, so early on it reflects whatever storms happened to fall in
   the window and stabilizes over weeks.</p>
+  <p><b>Weather events:</b> The tracker pulls active National Weather Service alerts for the area and tags each
+  outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
+  storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage — and those cities
+  are called out in the reliability panel. Storm aftermath (outages lingering after an alert expires) isn't
+  counted as blue-sky.</p>
   <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
   map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
   FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -455,6 +466,8 @@ let latest = null;         // FirstEnergy
 let latestCPP = null;      // Cleveland Public Power
 let pastStorms = [];        // completed-storm log (from shared state)
 let reliability = {};       // long-run per-city reliability aggregates (from shared state)
+let weather = null;         // current NWS alerts mapped to NE Ohio counties
+let weatherLog = [];        // rolling log of weather events seen
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let granularity = "township";
@@ -607,6 +620,8 @@ function applyShared(s){
   store.cppHistory = s.cppHistory || [];
   pastStorms = s.stormLog || [];
   reliability = s.reliability || {};
+  weather = s.weather || null;
+  weatherLog = s.weatherLog || [];
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -802,7 +817,9 @@ function relScore(r){
     outPct: r.timeHrs > 0 ? (r.outTimeHrs / r.timeHrs) * 100 : 0,
     peakPct: (r.peakFrac || 0) * 100,
     events: r.events || 0,
-    days, grade: relGrade(avail)
+    days, grade: relGrade(avail),
+    blueEvents: r.blueEvents || 0,                                  // outages with no weather event
+    blueShare: r.outHrs > 0 ? ((r.outHrsBlue || 0) / r.outHrs) * 100 : 0
   };
 }
 // compact per-city reliability line for the drill-down
@@ -811,7 +828,8 @@ function relLineHtml(id){
   if(!sc) return `<span style="color:var(--muted)">Reliability: collecting…</span>`;
   if(sc.building) return `<span style="color:var(--muted)">Reliability: building (${sc.days.toFixed(1)}d / 3d)</span>`;
   return `Reliability <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
-       + `out ${sc.outPct.toFixed(sc.outPct<10?1:0)}% of the time <small>(${sc.days.toFixed(0)}d)</small>`;
+       + `out ${sc.outPct.toFixed(sc.outPct<10?1:0)}% of the time <small>(${sc.days.toFixed(0)}d)</small>`
+       + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} outage${sc.blueEvents>1?"s":""} with no weather</b>` : "");
 }
 
 /* ---------- editable sorting (applies to county grid + drill-down) ---------- */
@@ -893,6 +911,21 @@ function setLive(cls, txt){ document.getElementById("liveState").innerHTML = `<s
 function showBanner(kind,msg){ const b=document.getElementById("banner"); b.className="banner show "+kind; b.textContent=msg; }
 function hideBanner(){ document.getElementById("banner").className="banner"; }
 
+function renderWeather(){
+  const el = document.getElementById("weatherBanner");
+  if(!el) return;
+  const alerts = (weather && weather.alerts) ? weather.alerts.filter(a => (a.counties||[]).length) : [];
+  if(!alerts.length){ el.innerHTML = ""; return; }
+  const byEvent = {};
+  alerts.forEach(a => { const set = (byEvent[a.event] = byEvent[a.event] || new Set()); (a.counties||[]).forEach(c => set.add(c)); });
+  const parts = Object.entries(byEvent)
+    .map(([ev, cset]) => `<span class="wx-ev"><b>${esc(ev)}</b> — ${[...cset].map(c => esc(titleCase(c))).join(", ")}</span>`)
+    .join(" · ");
+  el.innerHTML = `<div class="wx-banner"><span aria-hidden="true">⛈️</span>
+    <span><b>Active weather alerts (NE Ohio):</b> ${parts}. Outages during these are weather-related;
+    outages with no alert get flagged as possible infrastructure issues.</span></div>`;
+}
+
 function renderReliabilityPanel(){
   const el = document.getElementById("reliability");
   if(!el) return;
@@ -906,12 +939,25 @@ function renderReliabilityPanel(){
   const row = x => `<div class="rl-row"><span class="rl-name">${nameHtml(x.r.name)}<small>${nameHtml(x.r.county)} County</small></span>`
     + `<span class="rl-score"><b style="color:${relColor(x.sc.grade)}">${x.sc.grade}</b> ${x.sc.availPct.toFixed(2)}%`
     + `<small>${x.sc.outPct.toFixed(x.sc.outPct<10?1:0)}% of time out</small></span></div>`;
+
+  // cities whose unreliability isn't explained by weather (blue-sky outages)
+  const blue = scored.filter(x => x.sc.blueEvents > 0)
+    .sort((a,b)=> b.sc.blueEvents - a.sc.blueEvents || b.sc.blueShare - a.sc.blueShare).slice(0,6);
+  const blueRow = x => `<div class="rl-row"><span class="rl-name">${nameHtml(x.r.name)}<small>${nameHtml(x.r.county)} County</small></span>`
+    + `<span class="rl-score"><b style="color:var(--bad)">${x.sc.blueEvents}×</b>`
+    + `<small>${x.sc.blueShare.toFixed(0)}% of its outage, no weather</small></span></div>`;
+  const blueBlock = blue.length ? `<div class="rl-blue">
+      <div class="mv-h bad">⚠ Outages without a weather event <small style="font-weight:400;text-transform:none">— possible infrastructure issues</small></div>
+      <div class="movers">${blue.map(blueRow).join("")}</div>
+    </div>` : "";
+
   el.innerHTML = `<div class="panel">
     <h3>City reliability <small>availability over the last ~${days.toFixed(0)} days observed · higher = more dependable</small></h3>
     <div class="movers">
       <div><div class="mv-h bad">Least dependable</div>${least.map(row).join("")}</div>
       <div><div class="mv-h good">Most dependable</div>${most.map(row).join("")}</div>
     </div>
+    ${blueBlock}
   </div>`;
 }
 
@@ -931,6 +977,7 @@ function renderStormLog(){
 
 function render(){
   if(latest) renderFirstEnergy();
+  renderWeather();
   renderCPP();
   renderReliabilityPanel();
   renderStormLog();
@@ -1278,7 +1325,7 @@ function exportData(){
     cityHistory: mergeMap(loc && loc.cityHistory, store.cityHistory),
     cppPeak: Math.max((loc && loc.cppPeak) || 0, store.cppPeak || 0),
     cppHistory: mergeSeries(loc && loc.cppHistory, store.cppHistory),
-    reliability
+    reliability, weather, weatherLog
   };
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);

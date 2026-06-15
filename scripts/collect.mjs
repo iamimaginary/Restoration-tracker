@@ -88,10 +88,28 @@ async function fetchCPP(){
   return { updatedAt, accounts, feeders, features };
 }
 
+// Active NWS weather alerts for Ohio, mapped to our counties. Used to tell whether
+// an outage coincides with a weather event (vs. a blue-sky / infrastructure outage).
+async function fetchWeather(){
+  const data = await jget("https://api.weather.gov/alerts/active?area=OH", { "Accept": "application/geo+json" });
+  const counties = {};                       // COUNTY -> [event names]
+  const alerts = [];
+  for(const f of (data.features || [])){
+    const p = f.properties || {};
+    const areaU = (p.areaDesc || "").toUpperCase();
+    const hit = [...NEO].filter(c => areaU.includes(c));
+    const id = p.id || f.id;
+    if(p.event) alerts.push({ id, event: p.event, severity: p.severity || null,
+                              counties: hit, onset: p.onset || null, ends: p.ends || p.expires || null });
+    hit.forEach(c => { (counties[c] = counties[c] || []); if(!counties[c].includes(p.event)) counties[c].push(p.event); });
+  }
+  return { counties, alerts, weatherSet: new Set(Object.keys(counties)) };
+}
+
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
   catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
-                     activeStorm:null, belowSince:null, stormLog:[], reliability:{} }; }
+                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[] }; }
 }
 
 (async () => {
@@ -114,6 +132,12 @@ function loadPrev(){
   let cpp;
   try { cpp = await fetchCPP(); }
   catch(e){ console.error("CPP fetch failed, reusing previous:", e.message); cpp = null; }
+
+  // Weather is optional context; on failure assume no known alert (won't false-flag blue-sky).
+  let weather = { counties:{}, alerts:[], weatherSet:new Set() };
+  try { weather = await fetchWeather(); }
+  catch(e){ console.error("Weather fetch failed:", e.message); }
+  const weatherSet = weather.weatherSet || new Set();
 
   const now = Date.now();
   const cppBlock = cpp ? { updatedAt: cpp.updatedAt, accounts: cpp.accounts, feeders: cpp.feeders, features: cpp.features }
@@ -156,28 +180,58 @@ function loadPrev(){
   // Time-weighted on every collection so it reflects real elapsed time. dt is capped
   // so a collection gap can't distort one reading. Yields ASAI-style availability,
   // outage-time fraction, peak severity, and a distinct-event count.
+  // "Blue-sky" = an outage with no weather excuse: no current/recent NWS alert in the
+  // county AND no active regional storm. Recent-weather window avoids flagging storm
+  // aftermath (outages persist long after the NWS warning expires).
+  const WX_RECENT_MS = 24 * 60 * 60 * 1000;
+  const recentWxCounties = new Set(weatherSet);
+  for(const w of (prev.weatherLog || [])){
+    if((now - (w.lastSeen || 0)) <= WX_RECENT_MS) (w.counties || []).forEach(c => recentWxCounties.add(c));
+  }
+  const stormContext = !!prev.activeStorm || totalAll >= STORM_START;
+
   const reliability = structuredClone(prev.reliability || {});
-  fe.counties.forEach(c => c.subs.forEach(s => {
-    if(!s.served || s.served <= 0) return;
-    let r = reliability[s.id];
-    if(!r){ r = reliability[s.id] = { name:s.name, county:c.name, served:s.served, obs:0, firstT:now, lastT:0,
-              outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, peakFrac:0, events:0, _prevOut:0 }; }
-    r.name = s.name; r.county = c.name; r.served = s.served;
-    if(r.lastT){
-      const dt = Math.min(now - r.lastT, REL_DT_CAP_MS) / 3600000;   // hours, capped
-      if(dt > 0){
-        r.outHrs   += s.out * dt;
-        r.custHrs  += s.served * dt;
-        r.timeHrs  += dt;
-        if(s.out > 0) r.outTimeHrs += dt;
+  fe.counties.forEach(c => {
+    const blueCtx = !stormContext && !recentWxCounties.has(c.name);   // true ⇒ no weather/storm excuse
+    c.subs.forEach(s => {
+      if(!s.served || s.served <= 0) return;
+      let r = reliability[s.id];
+      if(!r){ r = reliability[s.id] = { name:s.name, county:c.name, served:s.served, obs:0, firstT:now, lastT:0,
+                outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, peakFrac:0, events:0,
+                outHrsBlue:0, outTimeBlueHrs:0, blueEvents:0, _prevOut:0 }; }
+      r.name = s.name; r.county = c.name; r.served = s.served;
+      // migrate older records that lack the blue-sky fields
+      if(r.outHrsBlue == null){ r.outHrsBlue = 0; r.outTimeBlueHrs = 0; r.blueEvents = 0; }
+      if(r.lastT){
+        const dt = Math.min(now - r.lastT, REL_DT_CAP_MS) / 3600000;   // hours, capped
+        if(dt > 0){
+          r.outHrs  += s.out * dt;
+          r.custHrs += s.served * dt;
+          r.timeHrs += dt;
+          if(s.out > 0){
+            r.outTimeHrs += dt;
+            if(blueCtx){ r.outHrsBlue += s.out * dt; r.outTimeBlueHrs += dt; }   // outage with NO weather excuse
+          }
+        }
       }
-    }
-    if(s.out > 0 && !(r._prevOut > 0)) r.events++;   // count distinct outage onsets
-    r._prevOut = s.out;
-    const frac = Math.min(1, s.out / s.served);
-    if(frac > r.peakFrac) r.peakFrac = frac;
-    r.obs++; r.lastT = now;
-  }));
+      if(s.out > 0 && !(r._prevOut > 0)){ r.events++; if(blueCtx) r.blueEvents++; }   // distinct onsets; blue-sky ones flagged
+      r._prevOut = s.out;
+      const frac = Math.min(1, s.out / s.served);
+      if(frac > r.peakFrac) r.peakFrac = frac;
+      r.obs++; r.lastT = now;
+    });
+  });
+
+  // rolling log of every weather event seen (NWS alerts), keyed by alert id
+  const weatherLog = (prev.weatherLog || []).slice();
+  const wlById = new Map(weatherLog.map(w => [w.id, w]));
+  for(const a of (weather.alerts || [])){
+    const ex = wlById.get(a.id);
+    if(ex){ ex.lastSeen = now; ex.ends = a.ends; ex.counties = a.counties; }
+    else { const w = { id:a.id, event:a.event, severity:a.severity, counties:a.counties, onset:a.onset, ends:a.ends, firstSeen:now, lastSeen:now };
+           weatherLog.unshift(w); wlById.set(a.id, w); }
+  }
+  while(weatherLog.length > 150) weatherLog.pop();
 
   // ---- automatic storm lifecycle ----
   let activeStorm = prev.activeStorm || (history.length ? { startedAt: history[0].t } : null);
@@ -227,6 +281,8 @@ function loadPrev(){
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
     peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability,
+    weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
+    weatherLog,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt
   };
   mkdirSync("data", { recursive: true });
