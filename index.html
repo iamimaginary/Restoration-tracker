@@ -181,6 +181,11 @@
   }
   #mapHint[hidden] { display:none; }
   #mapFallback { padding:24px; text-align:center; color:var(--muted); font-size:13px; }
+  .playback { display:flex; align-items:center; gap:10px; margin-top:12px; }
+  .playback[hidden] { display:none; }
+  .playback #playBtn { width:38px; padding:7px 0; justify-content:center; }
+  .playback input[type=range] { flex:1; accent-color:var(--accent); }
+  .playback #playLabel { font-size:11.5px; color:var(--muted); min-width:96px; text-align:right; font-variant-numeric:tabular-nums; }
   .map-ctrl { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; background:var(--bg); }
   .seg button { border:none; border-radius:0; padding:7px 13px; background:transparent; font-weight:600; color:var(--muted); }
@@ -382,6 +387,12 @@
         <span><i style="background:#2ecc71"></i>Restored</span>
         <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
         <span>· bubble size = customers affected</span>
+      </div>
+      <div class="playback" id="playback" hidden>
+        <button id="playBtn" type="button" title="Play / pause">▶</button>
+        <input type="range" id="playSlider" min="0" max="0" value="0" step="1" aria-label="Storm playback time" />
+        <span id="playLabel">live</span>
+        <button id="playLive" class="btn pin-mini" type="button">Live</button>
       </div>
     </div>
   </section>
@@ -1090,6 +1101,7 @@ function render(){
   }
   renderStormLog();
   drawMap();
+  buildPlayback();
   buildPlaceList();
   if(detailOpen && latest && latest.counties[detailOpen]) openDetail(detailOpen);   // keep open drill-down fresh
 }
@@ -1277,8 +1289,45 @@ function outagePopup(name, out, served, etr, key, includeRel){
     `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(etr))}</b></div>`;
 }
 
-/* ---------- map ---------- */
+/* ---------- map + storm playback ---------- */
 let mapUnavailable = false;
+let timeline = [];          // sorted snapshot timestamps (from store.history)
+let playIdx = null;         // null = live; else index into timeline being shown
+let playTimer = null;
+function buildPlayback(){
+  timeline = (store.history || []).map(p => p.t);
+  const pb = document.getElementById("playback"), sl = document.getElementById("playSlider");
+  if(!pb || !sl) return;
+  if(timeline.length < 2){ pb.hidden = true; playIdx = null; return; }
+  pb.hidden = false;
+  sl.max = timeline.length - 1;
+  if(playIdx == null) sl.value = sl.max;        // stay pinned to live as data grows
+  updatePlayLabel();
+}
+function updatePlayLabel(){
+  const lab = document.getElementById("playLabel");
+  if(!lab) return;
+  if(playIdx == null){ lab.textContent = "live"; return; }
+  const t = timeline[playIdx], pt = (store.history||[]).find(p=>p.t===t);
+  lab.textContent = timeStr(t) + (pt ? ` · ${fmt(pt.out)} out` : "");
+}
+function setPlay(idx){
+  playIdx = (idx == null || idx >= timeline.length - 1) ? null : idx;
+  const sl = document.getElementById("playSlider");
+  if(sl) sl.value = (playIdx == null ? timeline.length - 1 : playIdx);
+  updatePlayLabel(); drawMap();
+}
+function togglePlay(){
+  const btn = document.getElementById("playBtn");
+  if(playTimer){ clearInterval(playTimer); playTimer = null; if(btn) btn.textContent = "▶"; return; }
+  if(timeline.length < 2) return;
+  if(playIdx == null) playIdx = 0;               // start from the beginning
+  if(btn) btn.textContent = "⏸";
+  playTimer = setInterval(()=>{
+    if(playIdx == null || playIdx >= timeline.length - 1){ clearInterval(playTimer); playTimer=null; if(btn) btn.textContent="▶"; setPlay(null); return; }
+    setPlay(playIdx + 1);
+  }, 450);
+}
 function initMap(){
   if(map) return true;
   if(typeof L === "undefined"){          // Leaflet CDN blocked/unreachable
@@ -1315,14 +1364,16 @@ function drawMap(){
   markerLayer.clearLayers();
   const includeRestored = document.getElementById("restoredChk").checked;
   const list = latest ? scopeCounties() : [];
+  const histT = (playIdx != null && timeline[playIdx] != null) ? timeline[playIdx] : null;   // playback time, or null = live
+  const valAt = (series, t) => { let v=0; if(series) for(const pt of series){ if(pt.t<=t) v=pt.out; else break; } return v; };
 
-  // build point set depending on granularity
+  // build point set depending on granularity (historical out values when scrubbed)
   let points = [];
   if(granularity === "county"){
-    list.forEach(c=>{ if(c.loc) points.push({key:c.name, name:titleCase(c.name)+" County", out:c.out, served:c.served, etr:c.etr, loc:c.loc}); });
+    list.forEach(c=>{ if(c.loc) points.push({key:c.name, name:titleCase(c.name)+" County", out: histT!=null?valAt(store.countyHistory[c.name],histT):c.out, served:c.served, etr:c.etr, loc:c.loc}); });
   } else {
     list.forEach(c=>{
-      (c.subs||[]).forEach(s=>{ if(s.loc) points.push({key:s.id, name:titleCase(s.name)+", "+titleCase(c.name), out:s.out, served:s.served, etr:s.etr, loc:s.loc}); });
+      (c.subs||[]).forEach(s=>{ if(s.loc) points.push({key:s.id, name:titleCase(s.name)+", "+titleCase(c.name), out: histT!=null?valAt(store.cityHistory[s.id],histT):s.out, served:s.served, etr:s.etr, loc:s.loc}); });
     });
   }
   const shown = points.filter(p=> includeRestored ? true : p.out>0);
@@ -1339,8 +1390,8 @@ function drawMap(){
     bounds.push(p.loc);
   });
 
-  // Cleveland Public Power outage feeders (polygons) — always shown when present
-  if(latestCPP && latestCPP.features && latestCPP.features.length){
+  // Cleveland Public Power outage feeders (polygons) — current only, hidden during playback
+  if(histT == null && latestCPP && latestCPP.features && latestCPP.features.length){
     const gj = L.geoJSON({ type:"FeatureCollection", features:latestCPP.features }, {
       style:{ color:"#a855f7", weight:1.5, fillColor:"#a855f7", fillOpacity:0.30 },
       onEachFeature:(f,layer)=>{
@@ -1649,6 +1700,12 @@ document.getElementById("mycity").addEventListener("keydown", e=>{
   if(card && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDetail(card.dataset.county); }
 });
 document.getElementById("stormlog").addEventListener("click", e=>{ const b=e.target.closest("[data-storm]"); if(b) shareStorm(+b.dataset.storm); });
+document.getElementById("playSlider").addEventListener("input", e=>{
+  if(playTimer){ clearInterval(playTimer); playTimer=null; document.getElementById("playBtn").textContent="▶"; }
+  setPlay(+e.target.value);
+});
+document.getElementById("playBtn").addEventListener("click", togglePlay);
+document.getElementById("playLive").addEventListener("click", ()=> setPlay(null));
 document.getElementById("d_close").addEventListener("click", closeDetail);
 document.getElementById("detailBg").addEventListener("click", e=>{ if(e.target.id==="detailBg") closeDetail(); });
 document.addEventListener("keydown", e=>{
