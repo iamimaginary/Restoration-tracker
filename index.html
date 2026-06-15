@@ -189,6 +189,9 @@
   .row b { color: var(--text); font-variant-numeric: tabular-nums; }
   .pct { font-size: 13px; font-weight: 700; color: var(--good) !important; }
   .mini { margin-top:11px; }
+  .cspark-wrap { margin-top:12px; padding-top:11px; border-top:1px solid var(--line-soft); }
+  .cspark-lbl { font-size:10.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+  canvas.cspark { width:100%; height:30px; display:block; margin-top:5px; }
   .card .more { margin-top:13px; width:100%; justify-content:center; padding:8px; font-size:12px; font-weight:600; color:var(--accent-2); }
   .card .more:hover { color:#fff; }
 
@@ -645,6 +648,7 @@ function renderFirstEnergy(){
       const peak = store.peaks[c.name]||0;
       const util = NEO[c.name] || "FirstEnergy";
       const activeSubs = (c.subs||[]).filter(s=>s.out>0).length;
+      const hasTrend = (store.countyHistory[c.name]||[]).length >= 2;
       return `<div class="card card--${st} ${c.out<=0?'clear':''}">
         <h3><span class="nm">${nameHtml(c.name)}</span><span class="pill ${st}">${STATUS_LABEL[st]}</span></h3>
         <div class="util">${esc(util)}</div>
@@ -653,12 +657,19 @@ function renderFirstEnergy(){
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
         <div class="row"><span>Peak / Served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
         <div class="row"><span>Est. restoration</span><b>${esc(etrStr(c.etr))}</b></div>
+        ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
+          <canvas class="cspark" data-county="${esc(c.name)}" title="Customers out over time"></canvas></div>` : ""}
         <button class="btn more" type="button" data-county="${esc(c.name)}">
           View ${activeSubs?activeSubs+' affected ':''}cities / townships ▸
         </button>
       </div>`;
     }).join("");
   }
+  requestAnimationFrame(()=>{
+    document.querySelectorAll("#grid canvas.cspark").forEach(cv=>{
+      sparkline(cv, store.countyHistory[cv.dataset.county] || [], "#ff9d4d");
+    });
+  });
   drawChart();
 }
 
