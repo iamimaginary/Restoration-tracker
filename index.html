@@ -557,28 +557,38 @@ function applyShared(s){
   store.cityHistory = s.cityHistory || {};
   store.cppPeak = s.cppPeak || 0;
   store.cppHistory = s.cppHistory || [];
+  // sync dedup markers so a live fallback appends only genuinely newer points
+  store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
+  store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
 }
 function setSrcMode(txt){ const el=document.getElementById("srcMode"); if(el) el.textContent = txt; }
 
 /* ---------- refresh cycle ---------- */
+const STALE_MS = 25 * 60 * 1000;   // if the shared snapshot is older than this, refresh live
 async function refresh(manual){
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true; btn.textContent = "↻ Updating…";
   setLive("stale","Updating…");
 
   // Prefer the shared, server-collected snapshot so all visitors see identical data.
-  try {
-    const s = await loadShared();
+  // applyShared() (inside loadShared) also seeds the back-dated history + peaks.
+  let s = null;
+  try { s = await loadShared(); } catch(e){ /* not published yet / unreachable */ }
+  const fresh = s && (Date.now() - (s.collectedAt || 0) <= STALE_MS);
+
+  if(fresh){
     sharedMode = true;
     hideBanner(); setLive("live","Live");
     setSrcMode("shared feed · collected ~every 15 min" + (s.zeroSince ? " · awaiting reset" : ""));
     render();
-    btn.disabled = false; btn.textContent = "↻ Refresh now";
-    return;
-  } catch(e){ /* shared not available yet — fall back to live, per-browser */ }
-  sharedMode = false;
-  setSrcMode("live feed · this browser");
-  await refreshLive();
+  } else {
+    // Shared snapshot is missing or stale (e.g. the collector cron is delayed) —
+    // fetch live current numbers in this browser, keeping the shared back-dated
+    // history/peaks as the baseline that live points get appended to.
+    sharedMode = false;
+    setSrcMode(s ? "live feed · shared snapshot delayed" : "live feed · this browser");
+    await refreshLive();
+  }
   btn.disabled = false; btn.textContent = "↻ Refresh now";
 }
 
