@@ -21,6 +21,7 @@ const CAP_TOTAL = 1500, CAP_COUNTY = 1000, CAP_CITY = 96, MAX_CITIES = 300;
 const STORM_START = 2000, STORM_END_FLOOR = 500, STORM_END_PCT = 0.02;
 const STORM_END_SUSTAIN_MS = 3 * 60 * 60 * 1000;   // 3 h at/under restored level
 const STORM_MIN_PEAK = 5000;                        // don't log trivial blips
+const REL_DT_CAP_MS = 30 * 60 * 1000;               // cap per-reading time weight (guards against collection gaps)
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -90,7 +91,7 @@ async function fetchCPP(){
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
   catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
-                     activeStorm:null, belowSince:null, stormLog:[] }; }
+                     activeStorm:null, belowSince:null, stormLog:[], reliability:{} }; }
 }
 
 (async () => {
@@ -151,6 +152,33 @@ function loadPrev(){
   }
   if(cpp && prev._cppUpdatedAt !== cpp.updatedAt) pushCapped(cppHistory, { t: cpp.updatedAt, out: cppOut }, CAP_TOTAL);
 
+  // ---- long-run per-city reliability (persists across storms; never reset here) ----
+  // Time-weighted on every collection so it reflects real elapsed time. dt is capped
+  // so a collection gap can't distort one reading. Yields ASAI-style availability,
+  // outage-time fraction, peak severity, and a distinct-event count.
+  const reliability = structuredClone(prev.reliability || {});
+  fe.counties.forEach(c => c.subs.forEach(s => {
+    if(!s.served || s.served <= 0) return;
+    let r = reliability[s.id];
+    if(!r){ r = reliability[s.id] = { name:s.name, county:c.name, served:s.served, obs:0, firstT:now, lastT:0,
+              outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, peakFrac:0, events:0, _prevOut:0 }; }
+    r.name = s.name; r.county = c.name; r.served = s.served;
+    if(r.lastT){
+      const dt = Math.min(now - r.lastT, REL_DT_CAP_MS) / 3600000;   // hours, capped
+      if(dt > 0){
+        r.outHrs   += s.out * dt;
+        r.custHrs  += s.served * dt;
+        r.timeHrs  += dt;
+        if(s.out > 0) r.outTimeHrs += dt;
+      }
+    }
+    if(s.out > 0 && !(r._prevOut > 0)) r.events++;   // count distinct outage onsets
+    r._prevOut = s.out;
+    const frac = Math.min(1, s.out / s.served);
+    if(frac > r.peakFrac) r.peakFrac = frac;
+    r.obs++; r.lastT = now;
+  }));
+
   // ---- automatic storm lifecycle ----
   let activeStorm = prev.activeStorm || (history.length ? { startedAt: history[0].t } : null);
   let belowSince  = prev.belowSince ?? null;
@@ -198,7 +226,7 @@ function loadPrev(){
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
-    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory,
+    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt
   };
   mkdirSync("data", { recursive: true });
