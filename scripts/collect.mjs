@@ -116,7 +116,7 @@ async function fetchWeather(){
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
   catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
-                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[], etrStats:{} }; }
+                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[], etrStats:{}, relDay:null, relTrend:[] }; }
 }
 
 (async () => {
@@ -150,6 +150,7 @@ function loadPrev(){
   const cppBlock = cpp ? { updatedAt: cpp.updatedAt, accounts: cpp.accounts, feeders: cpp.feeders, features: cpp.features }
                        : (prev.cpp || { updatedAt: now, accounts: 0, feeders: [], features: [] });
   const neoOut = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+c.out, 0);
+  const neoServed = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+(c.served||0), 0);
   const cppOut = cppBlock.accounts || 0;
   const totalAll = neoOut + cppOut;
 
@@ -229,6 +230,20 @@ function loadPrev(){
     });
   });
 
+  // ---- daily regional reliability trend (NE Ohio availability per day) ----
+  let relDay = prev.relDay ? { ...prev.relDay } : null;
+  const relTrend = (prev.relTrend || []).slice();
+  const dayKey = new Date(now).toISOString().slice(0,10);
+  const dtCycle = prev.collectedAt ? Math.min(now - prev.collectedAt, REL_DT_CAP_MS) / 3600000 : 0;
+  if(!relDay || relDay.day !== dayKey){
+    if(relDay && relDay.custHrs > 0){                         // finalize the previous day
+      relTrend.push({ day: relDay.day, availPct: (1 - relDay.outHrs / relDay.custHrs) * 100 });
+      while(relTrend.length > 120) relTrend.shift();
+    }
+    relDay = { day: dayKey, outHrs: 0, custHrs: 0 };
+  }
+  if(dtCycle > 0 && neoServed > 0){ relDay.outHrs += neoOut * dtCycle; relDay.custHrs += neoServed * dtCycle; }
+
   // ---- ETR accuracy per county (persistent): does FirstEnergy restore by its promised ETR? ----
   const etrStats = structuredClone(prev.etrStats || {});
   fe.counties.forEach(c => {
@@ -305,7 +320,7 @@ function loadPrev(){
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
-    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats,
+    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
     weatherLog,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt

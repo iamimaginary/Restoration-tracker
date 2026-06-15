@@ -392,6 +392,10 @@
       <h3>NE Ohio Customers Without Power — Restoration Trend <small id="trendNote">building from live snapshots…</small></h3>
       <canvas id="trendChart"></canvas>
     </div>
+    <div class="panel">
+      <h3>Reliability trend <small id="relTrendNote">daily NE Ohio availability — builds over days</small></h3>
+      <canvas id="relTrendChart" style="height:200px"></canvas>
+    </div>
   </section>
 
   <!-- RELIABILITY -->
@@ -504,6 +508,7 @@ let reliability = {};       // long-run per-city reliability aggregates (from sh
 let weather = null;         // current NWS alerts mapped to NE Ohio counties
 let weatherLog = [];        // rolling log of weather events seen
 let etrStats = {};          // per-county ETR-accuracy aggregates (from shared state)
+let relTrend = [];          // daily NE Ohio availability % (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let granularity = "township";
@@ -659,6 +664,7 @@ function applyShared(s){
   weather = s.weather || null;
   weatherLog = s.weatherLog || [];
   etrStats = s.etrStats || {};
+  relTrend = s.relTrend || [];
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -1050,12 +1056,22 @@ function renderStormLog(){
   if(emptyEl) emptyEl.style.display = "none";
   el.innerHTML = `<div class="panel">
     <h3>Storm log <small>completed events, auto-archived as each one is restored</small></h3>
-    ${pastStorms.map(s=>`<div class="sl-row">
-      <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}</div>
+    ${pastStorms.map((s,i)=>`<div class="sl-row">
+      <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}
+        <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
       <div class="sl-meta">peak <b>${fmt(s.peakTotal)}</b> customers out · lasted ~${esc(durStr(s.durationHrs||0))}` +
         `${(s.topCounties&&s.topCounties.length)?` · hardest hit: ${s.topCounties.map(c=>esc(titleCase(c.name))).join(", ")}`:""}</div>
     </div>`).join("")}
   </div>`;
+}
+function shareStorm(i){
+  const s = pastStorms[i]; if(!s) return;
+  const hit = (s.topCounties||[]).map(c=>titleCase(c.name)).join(", ");
+  const text = `NE Ohio power outage — ${timeStr(s.startedAt)} to ${timeStr(s.endedAt)}: peaked at ${fmt(s.peakTotal)} customers out, lasted ~${durStr(s.durationHrs||0)}${hit?`, hardest hit ${hit}`:""}. ${location.origin}${location.pathname}#storms`;
+  const done = btn => { if(btn){ const o=btn.textContent; btn.textContent="Copied!"; setTimeout(()=>btn.textContent=o, 1500); } };
+  const btn = document.querySelector(`#stormlog [data-storm="${i}"]`);
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>done(btn)).catch(()=>{}); }
+  else { try { prompt("Copy this storm summary:", text); } catch(e){} }
 }
 
 function render(){
@@ -1063,6 +1079,7 @@ function render(){
   if(latest) renderMyCity();
   renderWeather();
   renderCPP();
+  drawRelTrend();
   renderUtility();
   renderReliabilityPanel();
   renderEtr();
@@ -1387,6 +1404,13 @@ function drawChart(){
   lineChart(document.getElementById("trendChart"), data, ORANGE,
     "Collecting live snapshots — the trend line appears after a couple of updates.");
 }
+function drawRelTrend(){
+  const cv = document.getElementById("relTrendChart"); if(!cv) return;
+  const note = document.getElementById("relTrendNote");
+  const data = (relTrend||[]).map(d => ({ t: Date.parse(d.day+"T12:00:00Z"), out: d.availPct }));
+  if(note) note.textContent = data.length < 2 ? "daily NE Ohio availability — builds over days" : data.length+" days";
+  lineChart(cv, data, BLUE, "Daily availability appears here after a couple of days of data.");
+}
 function drawCountyChart(name){
   lineChart(document.getElementById("d_chart"), store.countyHistory[name] || [], BLUE,
     "This county's curve appears once a few live snapshots are collected.");
@@ -1582,7 +1606,7 @@ function showTab(name){
     b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false");
   });
   if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); } }, 30);
-  if(name === "trends") setTimeout(drawChart, 0);
+  if(name === "trends") setTimeout(()=>{ drawChart(); drawRelTrend(); }, 0);
   if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
   // scroll to the top of the tab bar (not the page) so the new tab starts cleanly
   // under the sticky nav. Skipped on the initial load so we don't bury the header.
@@ -1624,6 +1648,7 @@ document.getElementById("mycity").addEventListener("keydown", e=>{
   const card = e.target.closest("[data-county]");
   if(card && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDetail(card.dataset.county); }
 });
+document.getElementById("stormlog").addEventListener("click", e=>{ const b=e.target.closest("[data-storm]"); if(b) shareStorm(+b.dataset.storm); });
 document.getElementById("d_close").addEventListener("click", closeDetail);
 document.getElementById("detailBg").addEventListener("click", e=>{ if(e.target.id==="detailBg") closeDetail(); });
 document.addEventListener("keydown", e=>{
