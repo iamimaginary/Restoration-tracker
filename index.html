@@ -688,15 +688,19 @@ function pruneCityHistory(){
 }
 
 /* ---------- restoration rate (customers restored per hour) ---------- */
-// Linear rate over the last ~90 min of a {t,out} series. Positive = recovering.
+// Linear rate from the collected history. Prefers points within the last ~2.5h,
+// but always uses whatever past data exists: if collection was sparse (only the
+// latest point falls in-window), it falls back to the previous collected point.
+// Positive = recovering.
 function restorationRate(series){
   if(!series || series.length < 2) return null;
   const latest = series[series.length-1];
-  const cutoff = latest.t - 90*60*1000;
-  let start = latest;
-  for(let i=0;i<series.length;i++){ if(series[i].t >= cutoff){ start = series[i]; break; } }
+  const WINDOW = 150*60*1000;   // ~2.5h
+  let start = null;
+  for(let i=0;i<series.length-1;i++){ if(series[i].t >= latest.t - WINDOW){ start = series[i]; break; } }
+  if(!start) start = series[series.length-2];   // sparse data → use the prior collected point
   const hrs = (latest.t - start.t)/3600000;
-  if(hrs < 0.2) return null;
+  if(hrs <= 0) return null;
   return { perHour: (start.out - latest.out)/hrs, out: latest.out };
 }
 function durStr(h){
