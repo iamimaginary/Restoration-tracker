@@ -479,6 +479,8 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"
+        integrity="sha256-65UqrlgGoRAnKfKRuriH3eeDrOhZgZo1SCenduc+SGo=" crossorigin=""></script>
 <script>
 /* ---------- FirstEnergy Ohio Storm Center (KÜBRA) identifiers ---------- */
 const KB = "https://kubra.io";
@@ -1312,6 +1314,7 @@ let mapUnavailable = false;
 let timeline = [];          // sorted snapshot timestamps (from store.history)
 let playIdx = null;         // null = live; else index into timeline being shown
 let playTimer = null;
+let heatLayer = null;       // city-level density overlay (heatmap mode)
 function buildPlayback(){
   timeline = (store.history || []).map(p => p.t);
   const pb = document.getElementById("playback"), sl = document.getElementById("playSlider");
@@ -1380,12 +1383,13 @@ function initMap(){
 function drawMap(){
   if(!initMap()) return;
   markerLayer.clearLayers();
+  if(heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
   const includeRestored = document.getElementById("restoredChk").checked;
   const list = latest ? scopeCounties() : [];
   const histT = (playIdx != null && timeline[playIdx] != null) ? timeline[playIdx] : null;   // playback time, or null = live
   const valAt = (series, t) => { let v=0; if(series) for(const pt of series){ if(pt.t<=t) v=pt.out; else break; } return v; };
 
-  // ---- county heatmap (choropleth) mode ----
+  // ---- heatmap mode: faint county choropleth base + finer city-level detail ----
   if(granularity === "heatmap"){
     if(!ohGeo){ loadOhGeo(); setTimeout(()=>map.invalidateSize(),0); return; }
     const byCounty = {};
@@ -1393,10 +1397,32 @@ function drawMap(){
     const layer = L.geoJSON(ohGeo, {
       filter: f => byCounty[f.properties.name],
       style: f => { const c=byCounty[f.properties.name]; const frac=c.served>0?c.out/c.served:0;
-        return { color:"#0e1620", weight:1, fillColor:choroColor(frac), fillOpacity:0.62 }; },
+        return { color:"#0e1620", weight:1, fillColor:choroColor(frac), fillOpacity:0.30 }; },   // faint base
       onEachFeature: (f,ly)=>{ const nm=f.properties.name; const c=byCounty[nm];
         ly.bindPopup(outagePopup(titleCase(nm)+" County", c.out, c.served, c.etr, nm, false)); }
     }).addTo(markerLayer);
+
+    // finer detail: per-city outage points
+    const cityPts = [];   // {loc,out,served,etr,id,name}
+    list.forEach(c => (c.subs||[]).forEach(s => {
+      if(!s.loc) return;
+      const out = histT!=null ? valAt(store.cityHistory[s.id], histT) : s.out;
+      if(out > 0) cityPts.push({ loc:s.loc, out, served:s.served, etr:s.etr, id:s.id, name:titleCase(s.name)+", "+titleCase(c.name) });
+    }));
+    const maxOut = Math.max(1, ...cityPts.map(p=>p.out));
+    if(typeof L.heatLayer === "function" && cityPts.length){
+      heatLayer = L.heatLayer(cityPts.map(p=>[p.loc[0], p.loc[1], p.out]),
+        { radius:26, blur:20, max:maxOut, minOpacity:0.30,
+          gradient:{0.0:"#2ecc71", 0.35:"#f1c40f", 0.65:"#ff7a18", 1.0:"#e74c3c"} }).addTo(map);
+      // invisible click targets so city stats are still tappable over the heat
+      cityPts.forEach(p => L.circleMarker(p.loc, { radius:10, opacity:0, fillOpacity:0 })
+        .bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.id, granularity==="township")).addTo(markerLayer));
+    } else {
+      // fallback (plugin unavailable): colored city dots by % out
+      cityPts.forEach(p => { const frac = p.served>0 ? p.out/p.served : 0;
+        L.circleMarker(p.loc, { radius:4+18*Math.sqrt(p.out)/Math.sqrt(maxOut), color:choroColor(frac), weight:0, fillColor:choroColor(frac), fillOpacity:0.7 })
+          .bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.id, false)).addTo(markerLayer); });
+    }
     const b = layer.getBounds();
     if(b.isValid() && !map._fitOnce){ map.fitBounds(b, {padding:[30,30], maxZoom:10}); map._fitOnce = true; }
     setTimeout(()=>map.invalidateSize(), 0);
