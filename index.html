@@ -206,7 +206,13 @@
   .sub-item:first-child { border-top:none; }
   .sub-head { display:flex; justify-content:space-between; gap:10px; font-size:14px; }
   .sub-head .snm { font-weight:600; }
-  .sub-meta { display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:4px; }
+  .sub-meta { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--muted); margin-top:4px; }
+  .dlabel { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; color:var(--muted); margin:2px 0 7px; }
+  .dlabel span { text-transform:none; letter-spacing:0; font-weight:400; }
+  .trend-line { display:flex; align-items:center; gap:10px; margin-top:8px; }
+  .trend-line .bar.thin { margin-top:0; }
+  canvas.spark { width:88px; height:26px; flex:none; }
+  .spark-wait { font-size:10px; color:var(--muted); flex:none; width:88px; text-align:right; opacity:.7; }
 
   footer { color: var(--muted); font-size: 12px; padding: 8px 24px 48px; max-width: 1200px; margin: 0 auto; line-height: 1.65; border-top: 1px solid var(--line-soft); margin-top: 10px; }
   footer p { margin: 12px 0; }
@@ -325,8 +331,9 @@
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="d_title">
     <h2><span id="d_title">County</span><button type="button" class="x" id="d_close" aria-label="Close">×</button></h2>
     <div class="msub" id="d_sub"></div>
-    <div style="font-size:12px;color:var(--muted);margin:2px 0 6px">Restoration trend — this county</div>
-    <canvas id="d_chart" style="height:170px;display:block;margin-bottom:12px"></canvas>
+    <div class="dlabel">Restoration trend — whole county</div>
+    <canvas id="d_chart" style="height:170px;display:block;margin-bottom:14px"></canvas>
+    <div class="dlabel">By city / township <span>· sparkline = customers out over time (falling = recovering)</span></div>
     <div class="sub-list" id="d_list"></div>
   </div>
 </div>
@@ -403,6 +410,7 @@ function loadStore(){
     s = { peaks, history:[], lastUpdatedAt:0 };
   }
   if(!s.countyHistory) s.countyHistory = {};   // { COUNTY: [{t,out}] }
+  if(!s.cityHistory) s.cityHistory = {};       // { areaId: [{t,out}] }
   if(typeof s.cppPeak !== "number") s.cppPeak = 0;
   if(!Array.isArray(s.cppHistory)) s.cppHistory = [];   // [{t,out:accounts}]
   if(typeof s.cppLastUpdated !== "number") s.cppLastUpdated = 0;
@@ -533,7 +541,16 @@ async function refresh(manual){
           arr.push({ t:data.updatedAt, out:c.out });
           if(arr.length > 500) arr.shift();
         }
+        // per-city series — only for cities that have shown an outage (keeps it small)
+        (c.subs||[]).forEach(s=>{
+          if(s.out>0 || store.cityHistory[s.id]){
+            const a = (store.cityHistory[s.id] = store.cityHistory[s.id] || []);
+            a.push({ t:data.updatedAt, out:s.out });
+            if(a.length > 240) a.shift();
+          }
+        });
       });
+      pruneCityHistory();
       store.lastUpdatedAt = data.updatedAt;
     }
     hideBanner(); setLive("live","Live");
@@ -557,6 +574,16 @@ async function refresh(manual){
   btn.disabled = false; btn.textContent = "↻ Refresh now";
 }
 function neoTotalOut(data){ return Object.keys(NEO).reduce((s,n)=> s + (data.counties[n] ? data.counties[n].out : 0), 0); }
+
+/* keep the per-city store bounded: once we track many cities, drop already-restored ones first */
+function pruneCityHistory(){
+  const ch = store.cityHistory, keys = Object.keys(ch), MAX = 400;
+  if(keys.length <= MAX) return;
+  const restored = keys.filter(k=>{ const a=ch[k]; return a.length && a[a.length-1].out===0; })
+                       .sort((a,b)=> ch[a][ch[a].length-1].t - ch[b][ch[b].length-1].t);
+  let over = keys.length - MAX;
+  for(const k of restored){ if(over<=0) break; delete ch[k]; over--; }
+}
 
 /* ---------- which counties are in scope ---------- */
 function scopeCounties(){
@@ -691,16 +718,25 @@ function openDetail(name){
     const st = statusOf(s.out, s.served, s.etr);
     const p = pctRestored(s.id, s.out);
     const peak = store.peaks[s.id]||0;
+    const hasSpark = (store.cityHistory[s.id]||[]).length >= 2;
     return `<div class="sub-item">
       <div class="sub-head"><span class="snm">${nameHtml(s.name)}</span>
         <span class="pill ${st}" style="font-size:10px">${STATUS_LABEL[st]}</span></div>
-      <div class="bar thin"><span style="width:${p}%"></span></div>
+      <div class="trend-line">
+        <div class="bar thin" style="flex:1"><span style="width:${p}%"></span></div>
+        ${hasSpark ? `<canvas class="spark" data-city="${esc(s.id)}" title="Customers out over time"></canvas>` : `<span class="spark-wait">collecting…</span>`}
+      </div>
       <div class="sub-meta">
         <span>${fmt(s.out)} out / ${fmt(s.served)} served</span>
-        <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""} · ETR ${etrStr(s.etr)}</span>
+        <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""} · ETR ${esc(etrStr(s.etr))}</span>
       </div>
     </div>`;
   }).join("") : `<div class="sub-meta">No sub-area detail reported for this county.</div>`;
+  requestAnimationFrame(()=>{
+    document.querySelectorAll("#d_list canvas.spark").forEach(cv=>{
+      sparkline(cv, store.cityHistory[cv.dataset.city] || [], "#ff9d4d");
+    });
+  });
   const first = detailOpen !== name;          // only (re)manage focus when newly opened
   document.getElementById("detailBg").classList.add("open");
   detailOpen = name;
@@ -853,6 +889,22 @@ function drawCountyChart(name){
   lineChart(document.getElementById("d_chart"), store.countyHistory[name] || [], BLUE,
     "This county's curve appears once a few live snapshots are collected.");
 }
+/* tiny inline sparkline of customers-out over time (no axes) — falling = recovering */
+function sparkline(canvas, data, color){
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth || 88, h = canvas.clientHeight || 26;
+  canvas.width = w*dpr; canvas.height = h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,w,h);
+  if(!data || data.length < 2) return;
+  const max = Math.max(...data.map(d=>d.out), 1);
+  const X = i => 2 + (w-4)*i/(data.length-1);
+  const Y = v => (h-3) - (h-6)*v/max;
+  ctx.beginPath(); data.forEach((d,i)=> i?ctx.lineTo(X(i),Y(d.out)):ctx.moveTo(X(i),Y(d.out)));
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.stroke();
+  const lx = X(data.length-1), ly = Y(data[data.length-1].out);
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(lx, ly, 1.9, 0, Math.PI*2); ctx.fill();
+}
 
 /* ---------- toolbar ---------- */
 function exportData(){
@@ -860,7 +912,7 @@ function exportData(){
     exportedAt: new Date().toISOString(),
     sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)"],
     firstEnergy: latest, cpp: latestCPP,
-    peaks: store.peaks, history: store.history, countyHistory: store.countyHistory,
+    peaks: store.peaks, history: store.history, countyHistory: store.countyHistory, cityHistory: store.cityHistory,
     cppPeak: store.cppPeak, cppHistory: store.cppHistory
   };
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
