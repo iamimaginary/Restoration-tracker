@@ -706,30 +706,29 @@ function restorationRate(series){
 function durStr(h){
   if(h < 1) return Math.max(1,Math.round(h*60))+" min";
   if(h < 24) return (h<3 ? Math.round(h*10)/10 : Math.round(h))+" hr";
-  return Math.round(h/24*10)/10+" days";
+  const d = Math.round(h/24*10)/10;
+  return d + (d === 1 ? " day" : " days");
 }
-// HTML badge for a city/county row
-function rateHtml(series, out){
-  if(out <= 0) return `<span style="color:var(--good)">✓ fully restored</span>`;
+// Classify a location's recent trend into a clear, non-misleading label.
+// A change only counts as restoring/rising if it's meaningful vs. how many are out
+// (>= max(5/hr, 1% of current out per hour)); otherwise it's "holding steady",
+// so a plateaued tail never reads as "restoring ~1/hr → hundreds of hours".
+function rateInfo(series, out){
+  if(out <= 0) return { cls:"good", txt:"✓ fully restored" };
   const r = restorationRate(series);
-  if(!r) return `<span style="color:var(--muted)">rate: collecting…</span>`;
+  if(!r) return { cls:"muted", txt:"rate: collecting…" };
   const ph = r.perHour;
-  if(ph > 1){
-    const eta = out/ph;
-    return `<span style="color:var(--good)">▼ restoring ~${fmt(ph)}/hr</span>${eta<=72?` · ~${durStr(eta)} to clear`:""}`;
+  const meaningful = Math.abs(ph) >= Math.max(5, out * 0.01);
+  if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
+  if(ph > 0){
+    const eta = out / ph;
+    return { cls:"good", txt:`▼ restoring ~${fmt(ph)}/hr` + (eta <= 48 ? ` · ~${durStr(eta)} to clear` : " (slow)") };
   }
-  if(ph < -1) return `<span style="color:var(--bad)">▲ rising ~${fmt(-ph)}/hr</span>`;
-  return `<span style="color:var(--muted)">↔ no recent change</span>`;
+  return { cls:"bad", txt:`▲ rising ~${fmt(-ph)}/hr` };
 }
-// plain-text version for the modal subheader
-function ratePlain(series, out){
-  if(out <= 0) return "fully restored";
-  const r = restorationRate(series);
-  if(!r) return "rate: collecting…";
-  const ph = r.perHour;
-  if(ph > 1){ const eta = out/ph; return `restoring ~${fmt(ph)}/hr${eta<=72?` (~${durStr(eta)} to clear)`:""}`; }
-  if(ph < -1) return `rising ~${fmt(-ph)}/hr`;
-  return "no recent change";
+const RATE_COLOR = { good:"var(--good)", bad:"var(--bad)", muted:"var(--muted)" };
+function rateHtml(series, out){ const i = rateInfo(series, out); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>`; }
+function ratePlain(series, out){ return rateInfo(series, out).txt;
 }
 
 /* ---------- editable sorting (applies to county grid + drill-down) ---------- */
