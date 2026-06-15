@@ -88,15 +88,8 @@
 
   main { padding: 18px max(24px, env(safe-area-inset-right)) 60px max(24px, env(safe-area-inset-left)); max-width: 1200px; margin: 0 auto; }
 
-  .disclaimer {
-    background: linear-gradient(90deg, rgba(241,196,15,.10), rgba(241,196,15,.04));
-    border: 1px solid rgba(241,196,15,.26); border-left: 3px solid var(--warn); color: #efe3bc;
-    border-radius: var(--r-md); padding: 11px 15px; margin-bottom: 18px; font-size: 12px; line-height: 1.55;
-    display: flex; gap: 11px; align-items: flex-start;
-  }
-  .disclaimer b { color: #ffe9a8; }
-  .disclaimer a { color: var(--accent-2); text-underline-offset: 2px; }
-  .disclaimer > span:first-child { font-size: 15px; line-height: 1.2; }
+  .notice { font-size: 11.5px; color: var(--muted); margin: 2px 0 14px; line-height: 1.5; }
+  .notice a { color: var(--accent-2); white-space: nowrap; text-underline-offset: 2px; }
 
   .banner { border:1px solid var(--line); border-radius:12px; padding:11px 14px; margin-bottom:18px; font-size:13px; display:none; align-items:center; gap:10px; }
   .banner.show { display:flex; }
@@ -307,16 +300,7 @@
 </header>
 
 <main>
-  <div class="disclaimer">
-    <span aria-hidden="true">⚠️</span>
-    <span><b>Unofficial tool — not affiliated with, endorsed by, or operated by FirstEnergy Corp.
-    (Ohio Edison, The Illuminating Company), Cleveland Public Power, or the City of Cleveland.</b>
-    Figures come from those utilities' public outage feeds and may be delayed, approximate, or incomplete.
-    For authoritative status, restoration times, and to report an outage, use the official sources:
-    <a href="https://outages-oh.firstenergycorp.com/?c=External_OH&o=View_by_Location" target="_blank" rel="noopener">FirstEnergy's map</a> / 1-888-LIGHTSS (1-888-544-4877),
-    or <a href="https://www.cpp.org/Power-Outages/Outage-Map" target="_blank" rel="noopener">Cleveland Public Power</a> / (216) 664-3156.
-    In a downed-line or life-threatening emergency, call 911.</span>
-  </div>
+  <div class="notice">Unofficial · not affiliated with FirstEnergy or Cleveland Public Power · for emergencies call 911. <a href="#about">Details &amp; how to report ↗</a></div>
 
   <div id="weatherBanner"></div>
   <div class="banner" id="banner" role="alert"></div>
@@ -1556,6 +1540,7 @@ async function searchZip(zip){
 
 /* ---------- tab navigation + deep links (#map, #reliability, …) ---------- */
 const TABS = ["now","map","trends","reliability","storms","about"];
+let tabReady = false;   // suppress scroll on the initial (programmatic) tab show
 function showTab(name){
   if(!TABS.includes(name)) name = "now";
   document.querySelectorAll(".tab").forEach(s => s.classList.toggle("on", s.id === "tab-"+name));
@@ -1566,7 +1551,12 @@ function showTab(name){
   if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); } }, 30);
   if(name === "trends") setTimeout(drawChart, 0);
   if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
-  window.scrollTo(0, 0);
+  // scroll to the top of the tab bar (not the page) so the new tab starts cleanly
+  // under the sticky nav. Skipped on the initial load so we don't bury the header.
+  if(tabReady){
+    const t = document.getElementById("tabs");
+    if(t){ const top = t.getBoundingClientRect().top; if(top > 4) window.scrollTo(0, window.scrollY + top - 1); }
+  }
 }
 
 /* ---------- wire up ---------- */
@@ -1623,6 +1613,7 @@ window.addEventListener("resize", ()=>{
 refresh(true);
 scheduleAuto();
 showTab(location.hash.slice(1) || "now");
+tabReady = true;
 </script>
 </body>
 </html>
