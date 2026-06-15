@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://kubra.io; base-uri 'none'; form-action 'none'" />
-<meta name="description" content="Unofficial live dashboard tracking power-restoration progress across Northeast Ohio, using FirstEnergy's public Ohio Storm Center outage feed. Not affiliated with FirstEnergy." />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://kubra.io https://www.arcgis.com https://services3.arcgis.com https://api.zippopotam.us; base-uri 'none'; form-action 'none'" />
+<meta name="description" content="Unofficial live dashboard tracking power-restoration progress across Northeast Ohio, using FirstEnergy's and Cleveland Public Power's public outage feeds. Not affiliated with either utility." />
 <meta name="robots" content="noindex" />
 <meta name="theme-color" content="#0f1722" />
 <meta name="color-scheme" content="dark" />
@@ -91,6 +91,11 @@
   button.danger:hover { border-color: var(--bad); color: var(--bad); }
   button:disabled { opacity:.5; cursor:default; }
   .toolbar label.toggle { font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:6px; cursor:pointer; }
+  .search { display:flex; gap:6px; align-items:center; }
+  .search input { background: var(--bg); border:1px solid var(--line); color:var(--text); padding:8px 11px; border-radius:9px; font-size:13px; min-width:190px; }
+  .search input:focus { outline:none; border-color:var(--accent); }
+  .searchmsg { font-size:12.5px; color:var(--muted); margin:-4px 0 16px; }
+  .searchmsg:empty { margin:0; }
 
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; margin: 22px 0; }
   .panel h3 { margin: 0 0 12px; font-size: 15px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
@@ -163,7 +168,7 @@
   <div class="logo" aria-hidden="true">⚡</div>
   <div>
     <h1>Northeast Ohio Power Restoration Tracker</h1>
-    <div class="sub">Unofficial · uses FirstEnergy's public Ohio Storm Center outage data</div>
+    <div class="sub">Unofficial · live FirstEnergy &amp; Cleveland Public Power outage data</div>
   </div>
   <div class="spacer"></div>
   <div class="updated" role="status" aria-live="polite">
@@ -175,11 +180,13 @@
 <main>
   <div class="disclaimer">
     <span aria-hidden="true">⚠️</span>
-    <span><b>Unofficial tool — not affiliated with, endorsed by, or operated by FirstEnergy Corp.,
-    Ohio Edison, or The Illuminating Company.</b> Figures come from FirstEnergy's public outage feed and may be
-    delayed or incomplete. For authoritative outage status, restoration times, and to report an outage, always use
-    <a href="https://outages-oh.firstenergycorp.com/?c=External_OH&o=View_by_Location" target="_blank" rel="noopener">FirstEnergy's official map</a>
-    or call 1-888-LIGHTSS (1-888-544-4877). In a downed-line or life-threatening emergency, call 911.</span>
+    <span><b>Unofficial tool — not affiliated with, endorsed by, or operated by FirstEnergy Corp.
+    (Ohio Edison, The Illuminating Company), Cleveland Public Power, or the City of Cleveland.</b>
+    Figures come from those utilities' public outage feeds and may be delayed, approximate, or incomplete.
+    For authoritative status, restoration times, and to report an outage, use the official sources:
+    <a href="https://outages-oh.firstenergycorp.com/?c=External_OH&o=View_by_Location" target="_blank" rel="noopener">FirstEnergy's map</a> / 1-888-LIGHTSS (1-888-544-4877),
+    or <a href="https://www.cpp.org/Power-Outages/Outage-Map" target="_blank" rel="noopener">Cleveland Public Power</a> / (216) 664-3156.
+    In a downed-line or life-threatening emergency, call 911.</span>
   </div>
 
   <div class="banner" id="banner" role="alert"></div>
@@ -190,13 +197,18 @@
   </section>
 
   <div class="toolbar">
-    <button class="primary" id="refreshBtn" onclick="refresh(true)">↻ Refresh now</button>
+    <button class="primary" id="refreshBtn">↻ Refresh now</button>
     <label class="toggle"><input type="checkbox" id="autoChk" checked /> Auto-refresh (5 min)</label>
     <label class="toggle"><input type="checkbox" id="allChk" /> Show all FE Ohio counties</label>
-    <button onclick="exportData()">⬇ Export JSON</button>
-    <a class="btn" href="https://outages-oh.firstenergycorp.com/?c=External_OH&o=View_by_Location" target="_blank" rel="noopener">🗺 Official Map ↗</a>
-    <button class="danger" onclick="resetTracking()">Reset peaks/history</button>
+    <div class="search" role="search">
+      <input id="searchInput" type="search" placeholder="Search city or ZIP…" list="placeList"
+             aria-label="Search by city, township, county, or ZIP code" autocomplete="off" />
+      <datalist id="placeList"></datalist>
+      <button type="button" id="searchBtn">Search</button>
+    </div>
+    <button id="exportBtn">⬇ Export JSON</button>
   </div>
+  <div id="searchMsg" class="searchmsg"></div>
 
   <!-- MAP -->
   <div class="panel">
@@ -219,8 +231,18 @@
       <span><i style="background:#ff7a18"></i>Significant</span>
       <span><i style="background:#3498db"></i>In progress (ETR)</span>
       <span><i style="background:#2ecc71"></i>Restored</span>
+      <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
       <span>· bubble size = customers affected</span>
     </div>
+  </div>
+
+  <!-- CLEVELAND PUBLIC POWER -->
+  <div class="panel" id="cppPanel">
+    <h3>
+      <span>Cleveland Public Power <small>municipal utility — separate from FirstEnergy · approximate data</small></span>
+      <span id="cppStatus" class="pill assessing">—</span>
+    </h3>
+    <div id="cppBody"><div class="sub-meta">Loading Cleveland Public Power data…</div></div>
   </div>
 
   <!-- TREND -->
@@ -246,20 +268,27 @@
 </div>
 
 <footer>
-  <p><b>How it works:</b> Reads FirstEnergy's public Ohio Storm Center feed (refreshed ~every 15 min)
-  directly in your browser and tracks restoration per county <em>and</em> per city/township. "% restored"
-  is measured against the <em>peak</em> outage this tracker has observed <em>since you opened the page</em>,
-  so a fresh visit mid-storm starts near 0% and the curves fall as you keep it open. Click any county card to
-  drill into its cities/townships, or explore the map.</p>
+  <p><b>How it works:</b> Reads two public feeds directly in your browser. <b>FirstEnergy</b> (Ohio Storm Center,
+  refreshed ~every 15 min) reports customers out per county and per city/township. <b>Cleveland Public Power</b>
+  reports which distribution <em>feeders</em> are out of service plus an <em>approximate</em> count of affected
+  accounts (no per-customer counts). "% restored" is measured against the <em>peak</em> each source has shown
+  <em>since you opened the page</em>, so a fresh visit mid-storm starts near 0% and the curves fall as you keep
+  it open. Click any FirstEnergy county card to drill into its cities/townships, search for a city or ZIP, or
+  explore the map.</p>
   <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. Observed peaks and trend history stay on your
-  device in <code>localStorage</code> and are never sent anywhere. Live data and map tiles are fetched from
-  FirstEnergy's feed and OpenStreetMap/CARTO, which (like any website) see your IP address.</p>
-  <p><b>Report an outage:</b> 1-888-LIGHTSS (1-888-544-4877) or
-  <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>.</p>
-  <p style="opacity:.7">Independent, non-commercial project. "FirstEnergy", "Ohio Edison", and "The Illuminating
-  Company" are trademarks of their respective owners, used here only to identify the data source — no affiliation
-  or endorsement is implied. Map tiles © OpenStreetMap contributors, © CARTO. Always refer to FirstEnergy for
-  authoritative outage information.</p>
+  device in <code>localStorage</code> and are never sent anywhere. Live data, map tiles, and ZIP lookups are
+  fetched from FirstEnergy (kubra.io), Cleveland Public Power's ArcGIS, OpenStreetMap/CARTO, and zippopotam.us,
+  which (like any website) see your IP address.</p>
+  <p><b>Report an outage:</b> FirstEnergy — 1-888-LIGHTSS (1-888-544-4877) /
+  <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>;
+  Cleveland Public Power — (216) 664-3156 /
+  <a href="https://www.cpp.org/Power-Outages" target="_blank" rel="noopener">cpp.org</a>.</p>
+  <p style="opacity:.7">Independent, non-commercial project. "FirstEnergy", "Ohio Edison", "The Illuminating
+  Company", and "Cleveland Public Power" are trademarks of their respective owners, used here only to identify the
+  data sources — no affiliation or endorsement is implied. CPP outage areas are approximate (accounts near an
+  out-of-service feeder) and provided by the City of Cleveland via Esri/ArcGIS. Map tiles © OpenStreetMap
+  contributors, © CARTO. ZIP lookups © zippopotam.us. Always refer to the utilities directly for authoritative
+  outage information.</p>
 </footer>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -269,6 +298,14 @@
 const KB = "https://kubra.io";
 const INSTANCE = "6c715f0e-bbec-465f-98cc-0b81623744be";
 const VIEW     = "db9c3f02-0a06-4672-a357-0f676eb75bfa";
+
+/* ---------- Cleveland Public Power (City of Cleveland ArcGIS) ---------- */
+/* The CPP outage app drives "feeders currently out" via a definitionExpression
+   (FEEDER_ID1 IN (...)) on its web map; we read that, then pull those feeders'
+   approximate affected-account counts + geometry from the hosted feature layer. */
+const CPP_WEBMAP = "88719296c67e4874b0bdd2abd91658b2";
+const CPP_ITEM   = id => `https://www.arcgis.com/sharing/rest/content/items/${id}`;
+const CPP_FS0    = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/CPPFeederAreas_BufferXMBuff100v3/FeatureServer/0";
 
 /* Canonical Northeast Ohio counties + serving FirstEnergy utility (feed names are UPPER) */
 const NEO = {
@@ -282,10 +319,11 @@ const STATUS_LABEL = { major:"Major outage", assessing:"Assessing", progress:"In
 const STATUS_COLOR = { major:"#e74c3c", significant:"#ff7a18", progress:"#3498db", restored:"#2ecc71" };
 const KEY = "neo_restoration_v3";
 
-let store = loadStore();   // { peaks:{key:peak}, history:[{t,out}], lastUpdatedAt }
-let latest = null;
+let store = loadStore();   // { peaks:{key:peak}, history:[{t,out}], lastUpdatedAt, countyHistory, cpp* }
+let latest = null;         // FirstEnergy
+let latestCPP = null;      // Cleveland Public Power
 let timer = null;
-let map = null, markerLayer = null;
+let map = null, markerLayer = null, searchLayer = null;
 let granularity = "township";
 let detailOpen = null;
 let lastFocus = null;
@@ -301,6 +339,9 @@ function loadStore(){
     s = { peaks, history:[], lastUpdatedAt:0 };
   }
   if(!s.countyHistory) s.countyHistory = {};   // { COUNTY: [{t,out}] }
+  if(typeof s.cppPeak !== "number") s.cppPeak = 0;
+  if(!Array.isArray(s.cppHistory)) s.cppHistory = [];   // [{t,out:accounts}]
+  if(typeof s.cppLastUpdated !== "number") s.cppLastUpdated = 0;
   return s;
 }
 function persist(){ try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
@@ -372,26 +413,56 @@ async function fetchLive(){
   return { updatedAt: cs.updatedAt || Date.now(), counties, allCounties };
 }
 
+/* ---------- Cleveland Public Power fetch (Esri/ArcGIS, CORS-enabled) ---------- */
+async function fetchCPP(){
+  // 1) read which feeders are currently out from the web map's definitionExpression
+  const data = await fetch(`${CPP_ITEM(CPP_WEBMAP)}/data?f=json`,{cache:"no-store"})
+    .then(r=>{ if(!r.ok) throw new Error("CPP map "+r.status); return r.json(); });
+  const layer = (data.operationalLayers||[]).find(l=>/Approximate Outage/i.test(l.title||""));
+  const expr  = (layer && layer.layerDefinition && layer.layerDefinition.definitionExpression) || "";
+  const ids = [...new Set((expr.match(/'([^']*)'/g)||[]).map(s=>s.slice(1,-1).trim()).filter(Boolean))];
+
+  // 2) pull those feeders' approximate affected accounts + polygons
+  let features = [];
+  if(ids.length){
+    const inList = ids.map(s=>`'${s.replace(/'/g,"''")}'`).join(",");
+    const q = `where=${encodeURIComponent("FEEDER_ID1 IN ("+inList+")")}` +
+              `&outFields=SUBSTATION,FEEDER_ID1,COUNT_,Label_Count&returnGeometry=true&outSR=4326&f=geojson`;
+    const gj = await fetch(`${CPP_FS0}/query?${q}`,{cache:"no-store"})
+      .then(r=>{ if(!r.ok) throw new Error("CPP feeders "+r.status); return r.json(); });
+    features = (gj.features||[]).filter(f=>f && f.geometry && f.properties);
+  }
+
+  // 3) "last updated" = when the outage app's web map item was last edited
+  let updatedAt = Date.now();
+  try {
+    const meta = await fetch(`${CPP_ITEM(CPP_WEBMAP)}?f=json`,{cache:"no-store"}).then(r=>r.json());
+    if(meta && meta.modified) updatedAt = meta.modified;
+  } catch(e){}
+
+  const accounts = features.reduce((s,f)=> s + (Number(f.properties.COUNT_)||0), 0);
+  const feeders  = [...new Set(features.map(f=>String(f.properties.FEEDER_ID1||"").trim()).filter(Boolean))];
+  return { updatedAt, accounts, feeders, features };
+}
+
 /* ---------- refresh cycle ---------- */
 async function refresh(manual){
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true; btn.textContent = "↻ Updating…";
   setLive("stale","Updating…");
-  try {
-    const data = await fetchLive();
-    latest = data;
 
-    // update peaks for every county and sub-area we can see
+  // Both sources are fetched independently — one failing never blocks the other.
+  const [feR, cppR] = await Promise.allSettled([fetchLive(), fetchCPP()]);
+
+  if(feR.status === "fulfilled"){
+    const data = feR.value; latest = data;
     data.allCounties.forEach(c=>{
       if((store.peaks[c.name]||0) < c.out) store.peaks[c.name] = c.out;
       c.subs.forEach(s=>{ if((store.peaks[s.id]||0) < s.out) store.peaks[s.id] = s.out; });
     });
-
-    const neoOut = neoTotalOut(data);
     if(data.updatedAt !== store.lastUpdatedAt){
-      store.history.push({ t: data.updatedAt, out: neoOut });
+      store.history.push({ t: data.updatedAt, out: neoTotalOut(data) });
       if(store.history.length > 800) store.history.shift();
-      // per-county series — kept once a county has shown an outage (or already has history)
       data.allCounties.forEach(c=>{
         if(c.out>0 || store.countyHistory[c.name]){
           const arr = (store.countyHistory[c.name] = store.countyHistory[c.name] || []);
@@ -401,15 +472,25 @@ async function refresh(manual){
       });
       store.lastUpdatedAt = data.updatedAt;
     }
-    persist();
-    hideBanner(); setLive("live","Live"); render();
-  } catch(err){
+    hideBanner(); setLive("live","Live");
+  } else {
     setLive("err","Feed error");
-    showBanner("error","Couldn't reach the live FirstEnergy feed ("+err.message+"). Showing the last data retrieved; will retry next cycle.");
-    if(latest) render(); else renderEmptyError();
-  } finally {
-    btn.disabled = false; btn.textContent = "↻ Refresh now";
+    showBanner("error","Couldn't reach the live FirstEnergy feed ("+(feR.reason && feR.reason.message || feR.reason)+"). Showing the last data retrieved; will retry next cycle.");
   }
+
+  if(cppR.status === "fulfilled"){
+    latestCPP = cppR.value;
+    if(latestCPP.accounts > (store.cppPeak||0)) store.cppPeak = latestCPP.accounts;
+    if(latestCPP.updatedAt !== store.cppLastUpdated){
+      store.cppHistory.push({ t: latestCPP.updatedAt, out: latestCPP.accounts });
+      if(store.cppHistory.length > 800) store.cppHistory.shift();
+      store.cppLastUpdated = latestCPP.updatedAt;
+    }
+  }
+
+  persist();
+  if(latest || latestCPP) render(); else renderEmptyError();
+  btn.disabled = false; btn.textContent = "↻ Refresh now";
 }
 function neoTotalOut(data){ return Object.keys(NEO).reduce((s,n)=> s + (data.counties[n] ? data.counties[n].out : 0), 0); }
 
@@ -427,7 +508,14 @@ function showBanner(kind,msg){ const b=document.getElementById("banner"); b.clas
 function hideBanner(){ document.getElementById("banner").className="banner"; }
 
 function render(){
-  if(!latest) return;
+  if(latest) renderFirstEnergy();
+  renderCPP();
+  drawMap();
+  buildPlaceList();
+  if(detailOpen && latest && latest.counties[detailOpen]) openDetail(detailOpen);   // keep open drill-down fresh
+}
+
+function renderFirstEnergy(){
   document.getElementById("lastUpdated").textContent = timeStr(latest.updatedAt);
   const showAll = document.getElementById("allChk").checked;
   const list = scopeCounties();
@@ -479,8 +567,43 @@ function render(){
     }).join("");
   }
   drawChart();
-  drawMap();
-  if(detailOpen && latest.counties[detailOpen]) openDetail(detailOpen);   // keep open drill-down fresh
+}
+
+/* ---------- Cleveland Public Power panel ---------- */
+const PURPLE = {fill:"rgba(168,85,247,.30)", fill0:"rgba(168,85,247,0)", line:"#a855f7", dot:"#c89bf6"};
+function renderCPP(){
+  const statusEl = document.getElementById("cppStatus");
+  const body = document.getElementById("cppBody");
+  if(!latestCPP){
+    statusEl.className = "pill assessing"; statusEl.textContent = "—";
+    body.innerHTML = `<div class="sub-meta">Couldn't load Cleveland Public Power data yet — it'll appear on the next refresh.</div>`;
+    return;
+  }
+  const acc = latestCPP.accounts, n = latestCPP.feeders.length, peak = store.cppPeak||0;
+  const asOf = esc(timeStr(latestCPP.updatedAt));
+  if(n === 0 || acc === 0){
+    statusEl.className = "pill restored"; statusEl.textContent = "No active outages";
+    body.innerHTML = `<div class="sub-meta">No active CPP feeder outages reported. Data as of ${asOf}.</div>`;
+    return;
+  }
+  statusEl.className = "pill major"; statusEl.textContent = `${n} feeder${n>1?"s":""} out`;
+  const restoredPct = peak>0 ? Math.max(0,Math.min(100, Math.round((peak-acc)/peak*100))) : 0;
+  const byFeeder = {};
+  latestCPP.features.forEach(f=>{ const id=String(f.properties.FEEDER_ID1||"").trim(); byFeeder[id]=(byFeeder[id]||0)+(Number(f.properties.COUNT_)||0); });
+  const rows = Object.entries(byFeeder).sort((a,b)=>b[1]-a[1])
+    .map(([id,c])=>`<div class="row"><span>Feeder ${esc(id)}</span><b>~${fmt(c)} accounts</b></div>`).join("");
+  body.innerHTML = `
+    <div class="summary" style="margin-bottom:14px">
+      <div class="stat"><div class="label">Approx. accounts affected</div><div class="value">~${fmt(acc)}</div></div>
+      <div class="stat"><div class="label">Feeders out</div><div class="value">${n}</div></div>
+      <div class="stat"><div class="label">Peak observed</div><div class="value">~${fmt(peak)}</div></div>
+      <div class="stat"><div class="label">Restored vs peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
+    </div>
+    <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
+    ${rows}
+    <div class="sub-meta" style="margin-top:8px">"Approx. accounts affected" is CPP's own estimate (accounts within ~100m of an out-of-service feeder) and areas may overlap. Data as of ${asOf}.</div>`;
+  requestAnimationFrame(()=> lineChart(document.getElementById("cpp_chart"), store.cppHistory, PURPLE,
+    "CPP trend builds as live snapshots are collected."));
 }
 
 function renderEmptyError(){
@@ -543,6 +666,7 @@ function initMap(){
     attribution:'&copy; OpenStreetMap &copy; CARTO'
   }).addTo(map);
   markerLayer = L.layerGroup().addTo(map);
+  searchLayer = L.layerGroup().addTo(map);
 
   // Cooperative gestures on touch: don't trap page scroll — require a tap to start panning.
   if(window.matchMedia && window.matchMedia("(pointer: coarse)").matches){
@@ -558,10 +682,10 @@ function initMap(){
   return true;
 }
 function drawMap(){
-  if(!initMap() || !latest) return;
+  if(!initMap()) return;
   markerLayer.clearLayers();
   const includeRestored = document.getElementById("restoredChk").checked;
-  const list = scopeCounties();
+  const list = latest ? scopeCounties() : [];
 
   // build point set depending on granularity
   let points = [];
@@ -593,6 +717,23 @@ function drawMap(){
     m.addTo(markerLayer);
     bounds.push(p.loc);
   });
+
+  // Cleveland Public Power outage feeders (polygons) — always shown when present
+  if(latestCPP && latestCPP.features && latestCPP.features.length){
+    const gj = L.geoJSON({ type:"FeatureCollection", features:latestCPP.features }, {
+      style:{ color:"#a855f7", weight:1.5, fillColor:"#a855f7", fillOpacity:0.30 },
+      onEachFeature:(f,layer)=>{
+        const p = f.properties;
+        layer.bindPopup(
+          `<b>CPP feeder ${esc(String(p.FEEDER_ID1||"").trim())}</b> · substation ${esc(p.SUBSTATION)}<br>`+
+          `<div class="pp-row"><span>Approx. accounts affected</span><b>~${fmt(p.COUNT_)}</b></div>`+
+          `<div class="pp-row"><span>Source</span><b>Cleveland Public Power</b></div>`
+        );
+      }
+    }).addTo(markerLayer);
+    const cb = gj.getBounds();
+    if(cb.isValid()){ bounds.push(cb.getNorthEast(), cb.getSouthWest()); }
+  }
 
   if(bounds.length && !map._fitOnce){
     map.fitBounds(bounds, { padding:[30,30], maxZoom:10 });
@@ -649,22 +790,96 @@ function drawCountyChart(name){
 
 /* ---------- toolbar ---------- */
 function exportData(){
-  const payload = { exportedAt:new Date().toISOString(), source:"FirstEnergy Ohio Storm Center (KUBRA)", latest, peaks:store.peaks, history:store.history };
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)"],
+    firstEnergy: latest, cpp: latestCPP,
+    peaks: store.peaks, history: store.history, countyHistory: store.countyHistory,
+    cppPeak: store.cppPeak, cppHistory: store.cppHistory
+  };
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
   a.download = `neo-restoration-${new Date().toISOString().slice(0,16).replace(/[:T]/g,"-")}.json`; a.click();
-}
-function resetTracking(){
-  if(confirm("Clear observed peaks and the trend history? (Live current data will reload.)")){
-    store = { peaks:{}, history:[], lastUpdatedAt:0 }; persist(); refresh(true);
-  }
 }
 function scheduleAuto(){
   if(timer) clearInterval(timer);
   if(document.getElementById("autoChk").checked) timer = setInterval(()=>refresh(false), 5*60*1000);
 }
 
+/* ---------- search by city / township / county / ZIP ---------- */
+function buildPlaceList(){
+  if(!latest) return;
+  const names = new Set();
+  latest.allCounties.forEach(c=>{ names.add(titleCase(c.name)+" County"); (c.subs||[]).forEach(s=>names.add(titleCase(s.name))); });
+  document.getElementById("placeList").innerHTML = [...names].sort().map(n=>`<option value="${esc(n)}"></option>`).join("");
+}
+function searchMsg(html){ document.getElementById("searchMsg").innerHTML = html; }
+function flyTo(loc, zoom, label){
+  if(!map || !loc) return;
+  map._fitOnce = true;                 // a search overrides auto-fit; respect the chosen view
+  map.setView(loc, zoom);
+  if(searchLayer){
+    searchLayer.clearLayers();
+    L.circleMarker(loc, { radius:9, color:"#fff", weight:2, fillColor:"#ff7a18", fillOpacity:0.9 })
+      .bindPopup("<b>"+esc(label)+"</b>").addTo(searchLayer).openPopup();
+  }
+}
+function doSearch(){
+  const q = document.getElementById("searchInput").value.trim();
+  if(!q){ searchMsg(""); return; }
+  if(/^\d{5}$/.test(q)) searchZip(q);
+  else searchByName(q);
+}
+function searchByName(q){
+  if(!latest){ searchMsg("Live data is still loading — try again in a moment."); return; }
+  const norm = q.toUpperCase().replace(/\s+COUNTY$/,"").trim();
+  let county = latest.allCounties.find(c=>c.name===norm) || latest.allCounties.find(c=>c.name.includes(norm));
+  let sub=null, parent=null;
+  if(!county){
+    for(const c of latest.allCounties){
+      const m = (c.subs||[]).find(s=>s.name.toUpperCase()===norm) || (c.subs||[]).find(s=>s.name.toUpperCase().includes(norm));
+      if(m){ sub=m; parent=c; break; }
+    }
+  }
+  if(county){
+    flyTo(county.loc, 10, titleCase(county.name)+" County");
+    openDetail(county.name);
+    searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.`);
+  } else if(sub){
+    flyTo(sub.loc, 12, titleCase(sub.name));
+    openDetail(parent.name);
+    searchMsg(`Found <b>${esc(titleCase(sub.name))}</b> in ${esc(titleCase(parent.name))} County — ${fmt(sub.out)} out; opened the county breakdown.`);
+  } else {
+    searchMsg(`No match for “${esc(q)}” in the tracked service areas. Try a county, city/township name, or a 5-digit ZIP.`);
+  }
+}
+async function searchZip(zip){
+  searchMsg(`Looking up ZIP ${esc(zip)}…`);
+  try{
+    const d = await fetch(`https://api.zippopotam.us/us/${zip}`).then(r=>{ if(!r.ok) throw new Error("not found"); return r.json(); });
+    const p = d.places && d.places[0];
+    if(!p) throw new Error("not found");
+    const loc=[parseFloat(p.latitude), parseFloat(p.longitude)];
+    const city=p["place name"], st=p["state abbreviation"];
+    flyTo(loc, 12, `ZIP ${zip} — ${city}, ${st}`);
+    let extra="";
+    if(latest){
+      const cu = city.toUpperCase();
+      for(const c of latest.allCounties){
+        if((c.subs||[]).some(s=>s.name.toUpperCase()===cu)){ openDetail(c.name); extra = ` Opened <b>${esc(titleCase(c.name))} County</b> (contains ${esc(titleCase(city))}).`; break; }
+      }
+    }
+    searchMsg(`Centered the map on <b>ZIP ${esc(zip)}</b> — ${esc(city)}, ${esc(st)}.${extra}`);
+  }catch(e){
+    searchMsg(`Couldn't find ZIP “${esc(zip)}”. Enter a valid US ZIP code, or search by city/township name.`);
+  }
+}
+
 /* ---------- wire up ---------- */
+document.getElementById("refreshBtn").addEventListener("click", ()=>refresh(true));
+document.getElementById("exportBtn").addEventListener("click", exportData);
+document.getElementById("searchBtn").addEventListener("click", doSearch);
+document.getElementById("searchInput").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); doSearch(); } });
 document.getElementById("autoChk").addEventListener("change", scheduleAuto);
 document.getElementById("allChk").addEventListener("change", ()=>{ if(latest){ if(map) map._fitOnce=false; render(); } });
 document.getElementById("restoredChk").addEventListener("change", drawMap);
@@ -691,7 +906,12 @@ document.addEventListener("keydown", e=>{
     else if(!e.shiftKey && document.activeElement===last){ e.preventDefault(); first.focus(); }
   }
 });
-window.addEventListener("resize", ()=>{ if(latest) drawChart(); if(detailOpen) drawCountyChart(detailOpen); });
+window.addEventListener("resize", ()=>{
+  if(latest) drawChart();
+  if(detailOpen) drawCountyChart(detailOpen);
+  const cc = document.getElementById("cpp_chart");
+  if(cc && latestCPP) lineChart(cc, store.cppHistory, PURPLE, "CPP trend builds as live snapshots are collected.");
+});
 
 refresh(true);
 scheduleAuto();
