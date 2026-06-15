@@ -372,6 +372,7 @@
           <span class="seg" id="granSeg">
             <button data-g="township" class="on">City / Township</button>
             <button data-g="county">County</button>
+            <button data-g="heatmap">Heatmap</button>
           </span>
           <label class="toggle"><input type="checkbox" id="restoredChk" /> include restored</label>
         </span>
@@ -1276,6 +1277,23 @@ function closeDetail(){
   if(lastFocus && lastFocus.focus){ lastFocus.focus(); lastFocus = null; }
 }
 
+/* ---------- county heatmap (choropleth) ---------- */
+const OHGEO_URL = "https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/claude/first-energy-restoration-tracker-m185by/oh-counties.geojson";
+let ohGeo = null, ohGeoLoading = false;
+function loadOhGeo(){
+  if(ohGeo || ohGeoLoading) return;
+  ohGeoLoading = true;
+  fetch(OHGEO_URL, {cache:"force-cache"}).then(r=>r.json()).then(g=>{ ohGeo = g; ohGeoLoading = false; if(granularity==="heatmap") drawMap(); }).catch(()=>{ ohGeoLoading = false; });
+}
+function choroColor(frac){            // frac = customers out / served
+  if(frac <= 0)     return "#16341f";
+  if(frac < 0.01)   return "#2ecc71";
+  if(frac < 0.03)   return "#f1c40f";
+  if(frac < 0.07)   return "#ff7a18";
+  if(frac < 0.15)   return "#e74c3c";
+  return "#a01b0f";
+}
+
 /* shared outage popup (map markers + search pin) */
 function outagePopup(name, out, served, etr, key, includeRel){
   const pr = pctRestored(key, out), peak = store.peaks[key] || 0;
@@ -1366,6 +1384,24 @@ function drawMap(){
   const list = latest ? scopeCounties() : [];
   const histT = (playIdx != null && timeline[playIdx] != null) ? timeline[playIdx] : null;   // playback time, or null = live
   const valAt = (series, t) => { let v=0; if(series) for(const pt of series){ if(pt.t<=t) v=pt.out; else break; } return v; };
+
+  // ---- county heatmap (choropleth) mode ----
+  if(granularity === "heatmap"){
+    if(!ohGeo){ loadOhGeo(); setTimeout(()=>map.invalidateSize(),0); return; }
+    const byCounty = {};
+    list.forEach(c=>{ byCounty[c.name] = { out: histT!=null?valAt(store.countyHistory[c.name],histT):c.out, served:c.served, etr:c.etr }; });
+    const layer = L.geoJSON(ohGeo, {
+      filter: f => byCounty[f.properties.name],
+      style: f => { const c=byCounty[f.properties.name]; const frac=c.served>0?c.out/c.served:0;
+        return { color:"#0e1620", weight:1, fillColor:choroColor(frac), fillOpacity:0.62 }; },
+      onEachFeature: (f,ly)=>{ const nm=f.properties.name; const c=byCounty[nm];
+        ly.bindPopup(outagePopup(titleCase(nm)+" County", c.out, c.served, c.etr, nm, false)); }
+    }).addTo(markerLayer);
+    const b = layer.getBounds();
+    if(b.isValid() && !map._fitOnce){ map.fitBounds(b, {padding:[30,30], maxZoom:10}); map._fitOnce = true; }
+    setTimeout(()=>map.invalidateSize(), 0);
+    return;
+  }
 
   // build point set depending on granularity (historical out values when scrubbed)
   let points = [];
