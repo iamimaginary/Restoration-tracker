@@ -15,7 +15,12 @@ const CPP_FS0 = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/servi
 
 const STATE_PATH = "data/state.json";
 const CAP_TOTAL = 1500, CAP_COUNTY = 1000, CAP_CITY = 96, MAX_CITIES = 300;
-const RESET = /^(1|true|yes|on)$/i.test(process.env.RESET || "");   // manual reset flag
+// Automatic storm lifecycle (no manual reset): a storm begins when total customers
+// out crosses STORM_START, and ends — logged + cleared for the next one — once it
+// stays at/under "restored" (max(STORM_END_FLOOR, 2% of peak)) for STORM_END_SUSTAIN_MS.
+const STORM_START = 2000, STORM_END_FLOOR = 500, STORM_END_PCT = 0.02;
+const STORM_END_SUSTAIN_MS = 3 * 60 * 60 * 1000;   // 3 h at/under restored level
+const STORM_MIN_PEAK = 5000;                        // don't log trivial blips
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -82,31 +87,14 @@ async function fetchCPP(){
   return { updatedAt, accounts, feeders, features };
 }
 
-const FRESH = () => ({ peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[], stormStartedAt:null, zeroSince:null });
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
-  catch(e){ return FRESH(); }
-}
-// On-demand reset: archive the current storm, then start from a clean slate.
-function resetState(prev){
-  const has = (prev.history||[]).length || Object.keys(prev.countyHistory||{}).length || (prev.cppHistory||[]).length;
-  if(has){
-    try {
-      mkdirSync("data/archive", { recursive: true });
-      const stamp = prev.stormStartedAt || prev.collectedAt || Date.now();
-      writeFileSync(`data/archive/storm-${new Date(stamp).toISOString().slice(0,10)}-${stamp}.json`,
-        JSON.stringify({ stormStartedAt: prev.stormStartedAt||null, archivedAt: Date.now(),
-          peaks: prev.peaks||{}, cppPeak: prev.cppPeak||0, history: prev.history||[],
-          countyHistory: prev.countyHistory||{}, cppHistory: prev.cppHistory||[] }));
-      console.log("reset: archived previous storm");
-    } catch(e){ console.error("archive failed:", e.message); }
-  }
-  return FRESH();
+  catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
+                     activeStorm:null, belowSince:null, stormLog:[] }; }
 }
 
 (async () => {
-  let prev = loadPrev();
-  if(RESET){ prev = resetState(prev); console.log("manual reset requested — starting fresh"); }
+  const prev = loadPrev();
 
   // FirstEnergy is required; if it fails, leave the last good state untouched.
   // Stay quiet on one-off blips (self-heals next cycle), but fail the run — which
@@ -163,14 +151,51 @@ function resetState(prev){
   }
   if(cpp && prev._cppUpdatedAt !== cpp.updatedAt) pushCapped(cppHistory, { t: cpp.updatedAt, out: cppOut }, CAP_TOTAL);
 
-  // storm lifecycle (informational only — reset is manual via RESET)
-  let stormStartedAt = prev.stormStartedAt || null;
-  let zeroSince = prev.zeroSince ?? null;
-  if(totalAll > 0){ if(!stormStartedAt) stormStartedAt = now; zeroSince = null; }
-  else if(zeroSince == null){ zeroSince = now; }
+  // ---- automatic storm lifecycle ----
+  let activeStorm = prev.activeStorm || (history.length ? { startedAt: history[0].t } : null);
+  let belowSince  = prev.belowSince ?? null;
+  const stormLog  = (prev.stormLog || []).slice();
+  let closed = false;
+
+  // peak of the current storm (NE Ohio total) from its accumulated history
+  const peakTotal = history.reduce((m,p)=> Math.max(m, p.out), 0);
+  const restoredLevel = Math.max(STORM_END_FLOOR, Math.round(peakTotal * STORM_END_PCT));
+
+  if(!activeStorm){
+    // between storms — start a new one once outages clearly rise
+    if(totalAll >= STORM_START){ activeStorm = { startedAt: now }; belowSince = null; }
+  } else {
+    if(totalAll <= restoredLevel){
+      if(belowSince == null) belowSince = now;
+      if(now - belowSince >= STORM_END_SUSTAIN_MS){
+        // storm is over: log a summary, then clear everything for the next storm
+        if(peakTotal >= STORM_MIN_PEAK){
+          const peakPt = history.find(p=>p.out === peakTotal) || { t: activeStorm.startedAt };
+          const topCounties = Object.entries(peaks)
+            .filter(([k]) => NEO.has(k))
+            .map(([name, peak]) => ({ name, peak }))
+            .sort((a,b)=> b.peak - a.peak).slice(0,3);
+          stormLog.unshift({
+            startedAt: activeStorm.startedAt, endedAt: belowSince,
+            durationHrs: Math.round((belowSince - activeStorm.startedAt) / 3600000 * 10) / 10,
+            peakTotal, peakAt: peakPt.t, topCounties
+          });
+          while(stormLog.length > 50) stormLog.pop();
+        }
+        history.length = 0; cppHistory.length = 0;
+        for(const k of Object.keys(countyHistory)) delete countyHistory[k];
+        for(const k of Object.keys(cityHistory)) delete cityHistory[k];
+        for(const k of Object.keys(peaks)) delete peaks[k];
+        cppPeak = 0; activeStorm = null; belowSince = null; closed = true;
+      }
+    } else {
+      belowSince = null;
+    }
+  }
 
   const state = {
-    schema: 1, collectedAt: now, stormStartedAt, zeroSince,
+    schema: 1, collectedAt: now,
+    activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
     peaks, cppPeak, history, countyHistory, cityHistory, cppHistory,
@@ -178,5 +203,5 @@ function resetState(prev){
   };
   mkdirSync("data", { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify(state));
-  console.log(`ok neoOut=${neoOut} cppOut=${cppOut} total=${totalAll} reset=${RESET} cities=${Object.keys(cityHistory).length}`);
+  console.log(`ok neoOut=${neoOut} cppOut=${cppOut} total=${totalAll} active=${!!activeStorm} closed=${closed} logged=${stormLog.length}`);
 })();
