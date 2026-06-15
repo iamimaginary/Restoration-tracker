@@ -47,6 +47,8 @@ async function jget(url, extraHeaders = {}){
 }
 const KUBRA_HEADERS = { "Referer": "https://outages-oh.firstenergycorp.com/", "Origin": "https://outages-oh.firstenergycorp.com" };
 const pushCapped = (arr, point, cap) => { arr.push(point); while(arr.length > cap) arr.shift(); return arr; };
+// Anomaly guard: customers-out can never be negative or exceed customers-served.
+const sane = (val, served) => { const o = (typeof val === "number" && isFinite(val)) ? Math.max(0, val) : 0; return served > 0 ? Math.min(o, served) : o; };
 
 async function fetchFE(){
   const cs = await jget(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/currentState?preview=false`, KUBRA_HEADERS);
@@ -56,16 +58,21 @@ async function fetchFE(){
   const src = (reps.find(r=>/report\.json$/i.test(r.source)) || reps[0]).source;
   const report = await jget(`${KB}/${dataPath}/${src}`, KUBRA_HEADERS);
   const st = report.file_data.areas[0];
-  const counties = (st.areas||[]).map(c => ({
-    name: c.name,
-    out: (c.cust_a && typeof c.cust_a.val === "number") ? c.cust_a.val : 0,
-    served: c.cust_s || 0, etr: c.etr || null, loc: centroid(c.gotoMap && c.gotoMap.bbox),
-    subs: (c.areas||[]).map(s => ({
-      id: s.areaId || (c.name+"|"+s.name), name: s.name,
-      out: (s.cust_a && typeof s.cust_a.val === "number") ? s.cust_a.val : 0,
-      served: s.cust_s || 0, etr: s.etr || null, loc: centroid(s.gotoMap && s.gotoMap.bbox)
-    }))
-  }));
+  const counties = (st.areas||[]).map(c => {
+    const served = c.cust_s || 0;
+    return {
+      name: c.name,
+      out: sane(c.cust_a && c.cust_a.val, served),
+      served, etr: c.etr || null, loc: centroid(c.gotoMap && c.gotoMap.bbox),
+      subs: (c.areas||[]).map(s => {
+        const ss = s.cust_s || 0;
+        return { id: s.areaId || (c.name+"|"+s.name), name: s.name,
+                 out: sane(s.cust_a && s.cust_a.val, ss), served: ss, etr: s.etr || null,
+                 loc: centroid(s.gotoMap && s.gotoMap.bbox) };
+      })
+    };
+  });
+  if(!counties.length) throw new Error("empty report (no counties)");   // don't publish a blank snapshot
   return { updatedAt: cs.updatedAt || Date.now(), counties };
 }
 

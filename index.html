@@ -258,6 +258,9 @@
   .rl-score b { font-weight:800; }
   .rl-score small { color:var(--muted); font-size:10px; }
   .rl-blue { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+  .mycity-card { border-color: rgba(255,122,24,.45); box-shadow: 0 0 0 1px rgba(255,122,24,.15), var(--sh-2); cursor:pointer; }
+  .mycity-card:hover { border-color: var(--accent); }
+  .pin-mini { padding:5px 10px; font-size:12px; margin-left:6px; }
   .dlabel { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; color:var(--muted); margin:2px 0 7px; }
   .dlabel span { text-transform:none; letter-spacing:0; font-weight:400; }
   .trend-line { display:flex; align-items:center; gap:10px; margin-top:8px; }
@@ -351,6 +354,7 @@
 
   <!-- NOW -->
   <section class="tab on" id="tab-now" role="tabpanel">
+    <div id="mycity"></div>
     <section class="summary" id="summary">
       <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       <div class="skeleton"></div><div class="skeleton"></div>
@@ -441,6 +445,9 @@
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
       address. Anything saved locally stays in your browser's <code>localStorage</code>.</p>
+      <p><b>Open data:</b> the shared dataset is public JSON, refreshed ~every 15 minutes —
+      <a href="https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/tracker-data/state.json" target="_blank" rel="noopener">tracker-data/state.json</a>.
+      Reuse it freely (it includes current outages, peaks, histories, reliability, ETR-accuracy, and weather).</p>
       <p><b>Report an outage:</b> FirstEnergy — 1-888-LIGHTSS (1-888-544-4877) /
       <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>;
       Cleveland Public Power — (216) 664-3156 /
@@ -977,6 +984,7 @@ function renderReliabilityPanel(){
     .filter(x => x.sc && !x.sc.building);
   if(scored.length < 5){ el.innerHTML = ""; return; }   // wait for a meaningful set
   const days = Math.max(...scored.map(x => x.sc.days));
+  const avgAvail = scored.reduce((a,x)=> a + x.sc.availPct, 0) / scored.length;
   const least = scored.slice().sort((a,b)=> a.sc.availPct - b.sc.availPct || b.sc.outPct - a.sc.outPct).slice(0,8);
   const most  = scored.slice().sort((a,b)=> b.sc.availPct - a.sc.availPct).slice(0,5);
   const row = x => `<div class="rl-row"><span class="rl-name">${nameHtml(x.r.name)}<small>${nameHtml(x.r.county)} County</small></span>`
@@ -995,7 +1003,7 @@ function renderReliabilityPanel(){
     </div>` : "";
 
   el.innerHTML = `<div class="panel">
-    <h3>City reliability <small>availability over the last ~${days.toFixed(0)} days observed · higher = more dependable</small></h3>
+    <h3>City reliability <small>last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable</small></h3>
     <div class="movers">
       <div><div class="mv-h bad">Least dependable</div>${least.map(row).join("")}</div>
       <div><div class="mv-h good">Most dependable</div>${most.map(row).join("")}</div>
@@ -1038,6 +1046,7 @@ function renderStormLog(){
 
 function render(){
   if(latest) renderFirstEnergy();
+  if(latest) renderMyCity();
   renderWeather();
   renderCPP();
   renderReliabilityPanel();
@@ -1411,6 +1420,47 @@ function buildPlaceList(){
   document.getElementById("placeList").innerHTML = [...names].sort().map(n=>`<option value="${esc(n)}"></option>`).join("");
 }
 function searchMsg(html){ document.getElementById("searchMsg").innerHTML = html; }
+
+/* ---------- "My city" — pin a place to the top of Now ---------- */
+let myCity = (()=>{ try { return JSON.parse(localStorage.getItem("neo_mycity") || "null"); } catch(e){ return null; } })();
+let pendingPin = null;
+function pinCity(){
+  if(!pendingPin) return;
+  myCity = pendingPin;
+  try { localStorage.setItem("neo_mycity", JSON.stringify(myCity)); } catch(e){}
+  searchMsg(`📍 Pinned <b>${esc(myCity.label)}</b> to the top of the Now tab.`);
+  showTab("now"); renderMyCity();
+}
+function clearMyCity(){ myCity = null; try { localStorage.removeItem("neo_mycity"); } catch(e){} renderMyCity(); }
+function renderMyCity(){
+  const el = document.getElementById("mycity");
+  if(!el) return;
+  if(!myCity || !latest){ el.innerHTML = ""; return; }
+  let out, served, etr, key, label, series, peak, countyName;
+  if(myCity.kind === "county"){
+    const c = latest.counties[myCity.name];
+    if(!c){ el.innerHTML = ""; return; }
+    out=c.out; served=c.served; etr=c.etr; key=c.name; series=store.countyHistory[c.name]; peak=store.peaks[c.name];
+    label = titleCase(c.name)+" County"; countyName = c.name;
+  } else {
+    const c = latest.counties[myCity.county];
+    const sub = c && (c.subs||[]).find(s => s.id===myCity.id || s.name===myCity.name);
+    if(!sub){ el.innerHTML = ""; return; }
+    out=sub.out; served=sub.served; etr=sub.etr; key=sub.id; series=store.cityHistory[sub.id]; peak=store.peaks[sub.id];
+    label = titleCase(sub.name)+" · "+titleCase(myCity.county)+" County"; countyName = myCity.county;
+  }
+  const st = statusOf(out, served, etr);
+  const p = pctRestored(key, out);
+  el.innerHTML = `<div class="panel mycity-card card--${st}" data-county="${esc(countyName)}" role="button" tabindex="0">
+    <h3><span class="nm">📍 ${esc(label)} <span class="pill ${st}">${STATUS_LABEL[st]}</span></span>
+      <button type="button" class="x" id="unpinBtn" aria-label="Unpin city" title="Unpin">×</button></h3>
+    <div class="row"><span>Currently out</span><b>${fmt(out)} / ${fmt(served)} served</b></div>
+    <div class="row"><span>Restored (vs peak)</span><b class="pct">${p}%</b></div>
+    <div class="row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>
+    <div class="row"><span>Est. restoration</span><b>${esc(etrStr(etr))}</b></div>
+    ${myCity.kind==="city" ? `<div class="sub-rel" style="margin-top:9px">${relLineHtml(key)}</div>` : ""}
+  </div>`;
+}
 function flyTo(loc, zoom, label, toMap){
   if(!loc) return;
   if(toMap) showTab("map");
@@ -1443,15 +1493,19 @@ function searchByName(q){
       if(m){ sub=m; parent=c; break; }
     }
   }
+  const pinBtn = ` <button class="btn pin-mini" type="button" data-pin="1">📌 Pin to Now</button>`;
   if(county){
+    pendingPin = { kind:"county", name:county.name, label:titleCase(county.name)+" County" };
     flyTo(county.loc, 10, titleCase(county.name)+" County");
     openDetail(county.name);
-    searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.`);
+    searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.${pinBtn}`);
   } else if(sub){
+    pendingPin = { kind:"city", name:sub.name, county:parent.name, id:sub.id, label:titleCase(sub.name) };
     flyTo(sub.loc, 12, titleCase(sub.name));
     openDetail(parent.name);
-    searchMsg(`Found <b>${esc(titleCase(sub.name))}</b> in ${esc(titleCase(parent.name))} County — ${fmt(sub.out)} out; opened the county breakdown.`);
+    searchMsg(`Found <b>${esc(titleCase(sub.name))}</b> in ${esc(titleCase(parent.name))} County — ${fmt(sub.out)} out; opened the breakdown.${pinBtn}`);
   } else {
+    pendingPin = null;
     searchMsg(`No match for “${esc(q)}” in the tracked service areas. Try a county, city/township name, or a 5-digit ZIP.`);
   }
 }
@@ -1514,6 +1568,15 @@ document.getElementById("granSeg").addEventListener("click", e=>{
 // delegated: open county drill-down (avoids inline handlers + name-splicing)
 document.getElementById("grid").addEventListener("click", e=>{
   const b = e.target.closest("button[data-county]"); if(b) openDetail(b.dataset.county);
+});
+document.getElementById("searchMsg").addEventListener("click", e=>{ if(e.target.closest("[data-pin]")) pinCity(); });
+document.getElementById("mycity").addEventListener("click", e=>{
+  if(e.target.closest("#unpinBtn")){ clearMyCity(); return; }
+  const card = e.target.closest("[data-county]"); if(card) openDetail(card.dataset.county);
+});
+document.getElementById("mycity").addEventListener("keydown", e=>{
+  const card = e.target.closest("[data-county]");
+  if(card && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDetail(card.dataset.county); }
 });
 document.getElementById("d_close").addEventListener("click", closeDetail);
 document.getElementById("detailBg").addEventListener("click", e=>{ if(e.target.id==="detailBg") closeDetail(); });
