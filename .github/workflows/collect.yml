@@ -7,8 +7,10 @@ name: Collect outage data
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # roughly every 15 minutes (GitHub may delay during load)
-  workflow_dispatch:
+    - cron: "*/15 * * * *"   # GitHub's own cron (unreliable/delayed — kept as a backstop)
+  workflow_dispatch:          # manual run
+  repository_dispatch:        # external pinger (e.g. cron-job.org) for reliable 15-min cadence
+    types: [collect]
 
 permissions:
   contents: write
