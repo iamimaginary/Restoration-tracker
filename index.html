@@ -972,12 +972,22 @@ function sparkline(canvas, data, color){
 
 /* ---------- toolbar ---------- */
 function exportData(){
+  // Merge in any locally-saved (pre-shared) history still in localStorage, so an
+  // export taken after switching to shared mode still includes the earlier curve.
+  let loc = null; try { loc = JSON.parse(localStorage.getItem(KEY) || "null"); } catch(e){}
+  const mergeSeries = (a,b)=>{ const m=new Map(); [...(a||[]),...(b||[])].forEach(p=>m.set(p.t,p)); return [...m.values()].sort((x,y)=>x.t-y.t); };
+  const mergeMap = (a,b)=>{ const o={}; for(const k in (a||{})) o[k]=(a[k]||[]).slice(); for(const k in (b||{})) o[k]=mergeSeries(o[k], b[k]); return o; };
+  const maxPeaks = (a,b)=>{ const o={...(a||{})}; for(const k in (b||{})) if((o[k]||0)<b[k]) o[k]=b[k]; return o; };
   const payload = {
     exportedAt: new Date().toISOString(),
     sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)"],
     firstEnergy: latest, cpp: latestCPP,
-    peaks: store.peaks, history: store.history, countyHistory: store.countyHistory, cityHistory: store.cityHistory,
-    cppPeak: store.cppPeak, cppHistory: store.cppHistory
+    peaks: maxPeaks(loc && loc.peaks, store.peaks),
+    history: mergeSeries(loc && loc.history, store.history),
+    countyHistory: mergeMap(loc && loc.countyHistory, store.countyHistory),
+    cityHistory: mergeMap(loc && loc.cityHistory, store.cityHistory),
+    cppPeak: Math.max((loc && loc.cppPeak) || 0, store.cppPeak || 0),
+    cppHistory: mergeSeries(loc && loc.cppHistory, store.cppHistory)
   };
   const blob = new Blob([JSON.stringify(payload,null,2)], {type:"application/json"});
   const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
