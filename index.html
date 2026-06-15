@@ -396,6 +396,7 @@
 
   <!-- RELIABILITY -->
   <section class="tab" id="tab-reliability" role="tabpanel">
+    <div id="utility"></div>
     <div id="reliability"></div>
     <div id="etr"></div>
     <div id="reliabilityEmpty" class="empty" style="display:none">City reliability ratings and ETR-accuracy stats appear here once enough data has been collected (a few days). Building…</div>
@@ -854,6 +855,8 @@ function relScore(r){
     peakPct: (r.peakFrac || 0) * 100,
     events: r.events || 0,
     days, grade: relGrade(avail),
+    interruptions: r.events || 0,                                   // SAIFI-style: # of distinct outages
+    avgOutageHrs: (r.events > 0) ? (r.outTimeHrs || 0) / r.events : 0,  // CAIDI-style: avg length per outage
     blueEvents: r.blueEvents || 0,                                  // outages with no weather event
     blueShare: r.outHrs > 0 ? ((r.outHrsBlue || 0) / r.outHrs) * 100 : 0
   };
@@ -864,8 +867,8 @@ function relLineHtml(id){
   if(!sc) return `<span style="color:var(--muted)">Reliability: collecting…</span>`;
   if(sc.building) return `<span style="color:var(--muted)">Reliability: building (${sc.days.toFixed(1)}d / 3d)</span>`;
   return `Reliability <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
-       + `out ${sc.outPct.toFixed(sc.outPct<10?1:0)}% of the time <small>(${sc.days.toFixed(0)}d)</small>`
-       + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} outage${sc.blueEvents>1?"s":""} with no weather</b>` : "");
+       + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
+       + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "");
 }
 
 /* ---------- editable sorting (applies to county grid + drill-down) ---------- */
@@ -998,6 +1001,31 @@ function renderReliabilityPanel(){
   </div>`;
 }
 
+function renderUtility(){
+  const el = document.getElementById("utility");
+  if(!el) return;
+  const agg = {};   // utility -> { outHrs, custHrs, days }
+  for(const r of Object.values(reliability)){
+    if(!(r.custHrs > 0) || (r.timeHrs || 0) < REL_ENOUGH_HRS) continue;
+    const util = NEO[r.county] || "FirstEnergy";
+    const a = agg[util] || (agg[util] = { outHrs:0, custHrs:0, days:0 });
+    a.outHrs += r.outHrs; a.custHrs += r.custHrs; a.days = Math.max(a.days, (r.timeHrs||0)/24);
+  }
+  const rows = Object.entries(agg).filter(([,a]) => a.custHrs > 0)
+    .map(([util,a]) => ({ util, avail:(1 - a.outHrs/a.custHrs)*100, days:a.days }))
+    .sort((x,y)=> y.avail - x.avail);
+  if(rows.length < 2){ el.innerHTML = ""; return; }   // need ≥2 utilities to compare
+  const body = rows.map(x => `<div class="rl-row">
+      <span class="rl-name">${esc(x.util)}</span>
+      <span class="rl-score"><b style="color:${relColor(relGrade(x.avail))}">${relGrade(x.avail)}</b> ${x.avail.toFixed(2)}%</span>
+    </div>`).join("");
+  el.innerHTML = `<div class="panel">
+    <h3>Utility comparison <small>customer-weighted availability over the last ~${rows[0].days.toFixed(0)} days</small></h3>
+    ${body}
+    <div class="sub-meta" style="margin-top:8px">Cleveland Public Power is tracked separately (feeder-level, approximate) and isn't directly comparable here.</div>
+  </div>`;
+}
+
 function renderEtr(){
   const el = document.getElementById("etr");
   if(!el) return;
@@ -1035,12 +1063,13 @@ function render(){
   if(latest) renderMyCity();
   renderWeather();
   renderCPP();
+  renderUtility();
   renderReliabilityPanel();
   renderEtr();
   const relEmpty = document.getElementById("reliabilityEmpty");
   if(relEmpty){
-    const a = document.getElementById("reliability"), b = document.getElementById("etr");
-    relEmpty.style.display = ((a && a.innerHTML.trim()) || (b && b.innerHTML.trim())) ? "none" : "";
+    const has = ["reliability","etr","utility"].some(id => { const e=document.getElementById(id); return e && e.innerHTML.trim(); });
+    relEmpty.style.display = has ? "none" : "";
   }
   renderStormLog();
   drawMap();
