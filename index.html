@@ -722,9 +722,11 @@ function rateInfo(series, out){
   if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
   if(ph > 0){
     const eta = out / ph;
-    return { cls:"good", txt:`▼ restoring ~${fmt(ph)}/hr` + (eta <= 48 ? ` · ~${durStr(eta)} to clear` : " (slow)") };
+    return { cls:"good", txt: eta <= 48
+      ? `▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)`
+      : `▼ restoring slowly (~${fmt(ph)} restored/hr)` };
   }
-  return { cls:"bad", txt:`▲ rising ~${fmt(-ph)}/hr` };
+  return { cls:"bad", txt:`▲ rising (~${fmt(-ph)} added/hr)` };
 }
 const RATE_COLOR = { good:"var(--good)", bad:"var(--bad)", muted:"var(--muted)" };
 function rateHtml(series, out){ const i = rateInfo(series, out); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>`; }
