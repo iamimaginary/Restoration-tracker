@@ -42,13 +42,29 @@
     font-variant-numeric: tabular-nums;
   }
   header {
-    position: sticky; top: 0; z-index: 600;
     padding: 14px max(20px, env(safe-area-inset-left)) 14px max(20px, env(safe-area-inset-right));
     border-bottom: 1px solid var(--line);
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
-    background: rgba(14,22,32,.78); backdrop-filter: blur(12px) saturate(1.2);
-    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    background: rgba(14,22,32,.78);
   }
+  /* tabbed navigation */
+  .tabs {
+    display: flex; gap: 2px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+    border-bottom: 1px solid var(--line); margin: 2px 0 18px; position: sticky; top: 0; z-index: 500;
+    background: rgba(14,22,32,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button {
+    background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 11px 15px; color: var(--muted); font-weight: 600; font-size: 13.5px; white-space: nowrap;
+  }
+  .tabs button:hover { color: #fff; background: none; border-bottom-color: var(--line); }
+  .tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+  .tab { display: none; }
+  .tab.on { display: block; animation: fadeTab .2s ease; }
+  @keyframes fadeTab { from { opacity: .3; } to { opacity: 1; } }
+  .tab > .panel:first-child, .tab > .summary:first-child { margin-top: 0; }
   .logo {
     width: 44px; height: 44px; border-radius: 12px; flex: none;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -249,9 +265,11 @@
   canvas.spark { width:88px; height:26px; flex:none; }
   .spark-wait { font-size:10px; color:var(--muted); flex:none; width:88px; text-align:right; opacity:.7; }
 
-  footer { color: var(--muted); font-size: 12px; padding: 8px 24px 48px; max-width: 1200px; margin: 0 auto; line-height: 1.65; border-top: 1px solid var(--line-soft); margin-top: 10px; }
-  footer p { margin: 12px 0; }
-  footer a { color: var(--accent-2); text-underline-offset: 2px; }
+  .about { color: var(--muted); font-size: 13px; line-height: 1.65; }
+  .about p { margin: 0 0 14px; }
+  .about p:last-child { margin-bottom: 0; }
+  .about a { color: var(--accent-2); text-underline-offset: 2px; }
+  .about b { color: var(--text); }
   .empty { color: var(--muted); padding: 44px; text-align: center; border: 1px dashed var(--line); border-radius: var(--r-md); grid-column:1/-1; }
   .skeleton { background: linear-gradient(90deg,var(--panel) 25%,var(--panel-2) 50%,var(--panel) 75%); background-size:200% 100%; animation:sk 1.3s infinite; height:150px; border-radius:var(--r-md); border:1px solid var(--line); }
   @keyframes sk { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
@@ -329,53 +347,119 @@
   </div>
   <div id="searchMsg" class="searchmsg"></div>
 
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+    <button data-tab="now" class="on" role="tab" aria-selected="true">Now</button>
+    <button data-tab="map" role="tab" aria-selected="false">Map</button>
+    <button data-tab="trends" role="tab" aria-selected="false">Trends</button>
+    <button data-tab="reliability" role="tab" aria-selected="false">Reliability</button>
+    <button data-tab="storms" role="tab" aria-selected="false">Storms</button>
+    <button data-tab="about" role="tab" aria-selected="false">About</button>
+  </nav>
+
+  <!-- NOW -->
+  <section class="tab on" id="tab-now" role="tabpanel">
+    <section class="summary" id="summary">
+      <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+      <div class="skeleton"></div><div class="skeleton"></div>
+    </section>
+    <div id="movers"></div>
+    <div class="grid" id="grid">
+      <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+    </div>
+    <div class="panel" id="cppPanel">
+      <h3>
+        <span>Cleveland Public Power <small>municipal utility — separate from FirstEnergy · approximate data</small></span>
+        <span id="cppStatus" class="pill assessing">—</span>
+      </h3>
+      <div id="cppBody"><div class="sub-meta">Loading Cleveland Public Power data…</div></div>
+    </div>
+  </section>
+
   <!-- MAP -->
-  <div class="panel">
-    <h3>
-      <span>Outage Map — progress by location</span>
-      <span class="map-ctrl">
-        <span class="seg" id="granSeg">
-          <button data-g="township" class="on">City / Township</button>
-          <button data-g="county">County</button>
+  <section class="tab" id="tab-map" role="tabpanel">
+    <div class="panel">
+      <h3>
+        <span>Outage Map — progress by location</span>
+        <span class="map-ctrl">
+          <span class="seg" id="granSeg">
+            <button data-g="township" class="on">City / Township</button>
+            <button data-g="county">County</button>
+          </span>
+          <label class="toggle"><input type="checkbox" id="restoredChk" /> include restored</label>
         </span>
-        <label class="toggle"><input type="checkbox" id="restoredChk" /> include restored</label>
-      </span>
-    </h3>
-    <div class="map-wrap">
-      <div id="map"></div>
-      <div id="mapHint" hidden>Tap the map to pan &amp; zoom</div>
+      </h3>
+      <div class="map-wrap">
+        <div id="map"></div>
+        <div id="mapHint" hidden>Tap the map to pan &amp; zoom</div>
+      </div>
+      <div class="legend">
+        <span><i style="background:#e74c3c"></i>Major (≥10% out)</span>
+        <span><i style="background:#ff7a18"></i>Significant</span>
+        <span><i style="background:#3498db"></i>In progress (ETR)</span>
+        <span><i style="background:#2ecc71"></i>Restored</span>
+        <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
+        <span>· bubble size = customers affected</span>
+      </div>
     </div>
-    <div class="legend">
-      <span><i style="background:#e74c3c"></i>Major (≥10% out)</span>
-      <span><i style="background:#ff7a18"></i>Significant</span>
-      <span><i style="background:#3498db"></i>In progress (ETR)</span>
-      <span><i style="background:#2ecc71"></i>Restored</span>
-      <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
-      <span>· bubble size = customers affected</span>
+  </section>
+
+  <!-- TRENDS -->
+  <section class="tab" id="tab-trends" role="tabpanel">
+    <div class="panel">
+      <h3>NE Ohio Customers Without Power — Restoration Trend <small id="trendNote">building from live snapshots…</small></h3>
+      <canvas id="trendChart"></canvas>
     </div>
-  </div>
+  </section>
 
-  <!-- CLEVELAND PUBLIC POWER -->
-  <div class="panel" id="cppPanel">
-    <h3>
-      <span>Cleveland Public Power <small>municipal utility — separate from FirstEnergy · approximate data</small></span>
-      <span id="cppStatus" class="pill assessing">—</span>
-    </h3>
-    <div id="cppBody"><div class="sub-meta">Loading Cleveland Public Power data…</div></div>
-  </div>
+  <!-- RELIABILITY -->
+  <section class="tab" id="tab-reliability" role="tabpanel">
+    <div id="reliability"></div>
+    <div id="etr"></div>
+    <div id="reliabilityEmpty" class="empty" style="display:none">City reliability ratings and ETR-accuracy stats appear here once enough data has been collected (a few days). Building…</div>
+  </section>
 
-  <!-- TREND -->
-  <div class="panel">
-    <h3>NE Ohio Customers Without Power — Restoration Trend <small id="trendNote">building from live snapshots…</small></h3>
-    <canvas id="trendChart"></canvas>
-  </div>
+  <!-- STORMS -->
+  <section class="tab" id="tab-storms" role="tabpanel">
+    <div id="stormlog"></div>
+    <div id="stormsEmpty" class="empty" style="display:none">No completed storms logged yet. When the current event is restored it'll be archived here, and the next storm starts automatically.</div>
+  </section>
 
-  <div class="grid" id="grid">
-    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
-  </div>
-
-  <div id="reliability"></div>
-  <div id="stormlog"></div>
+  <!-- ABOUT -->
+  <section class="tab" id="tab-about" role="tabpanel">
+    <div class="panel about">
+      <p><b>How it works:</b> A scheduled job collects two public feeds about every 15 minutes and publishes one
+      shared snapshot, so <em>every visitor sees the same trends</em> (you don't need to keep the page open).
+      <b>FirstEnergy</b> (Ohio Storm Center) reports customers out per county and per city/township;
+      <b>Cleveland Public Power</b> reports which distribution <em>feeders</em> are out plus an <em>approximate</em>
+      count of affected accounts (no per-customer counts). "% restored" and the restoration-rate figures are measured
+      against the <em>peak</em> observed since the current storm began; the shared history <b>auto-advances</b> —
+      when a storm is restored it's archived to the Storms log and the next one starts on its own.
+      If the shared snapshot can't be reached, the page falls back to live data tracked only in your browser.</p>
+      <p><b>Reliability score:</b> Once a city has ~3 days of observations, it gets a long-run reliability rating that
+      keeps averaging in as data accumulates. The headline is <em>availability</em> — the share of customer-time with
+      power (an ASAI-style measure) — graded A+ to F, alongside how often it has any outage and its worst severity
+      seen. It's built only from collected snapshots, so early on it reflects whatever storms fell in the window and
+      stabilizes over weeks.</p>
+      <p><b>Weather events:</b> The tracker pulls active National Weather Service alerts for the area and tags each
+      outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
+      storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage. Storm aftermath
+      (outages lingering after an alert expires) isn't counted as blue-sky.</p>
+      <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
+      map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
+      FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
+      address. Anything saved locally stays in your browser's <code>localStorage</code>.</p>
+      <p><b>Report an outage:</b> FirstEnergy — 1-888-LIGHTSS (1-888-544-4877) /
+      <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>;
+      Cleveland Public Power — (216) 664-3156 /
+      <a href="https://www.cpp.org/Power-Outages" target="_blank" rel="noopener">cpp.org</a>.</p>
+      <p style="opacity:.7">Independent, non-commercial project. "FirstEnergy", "Ohio Edison", "The Illuminating
+      Company", and "Cleveland Public Power" are trademarks of their respective owners, used here only to identify the
+      data sources — no affiliation or endorsement is implied. CPP outage areas are approximate (accounts near an
+      out-of-service feeder) and provided by the City of Cleveland via Esri/ArcGIS. Map tiles © OpenStreetMap
+      contributors, © CARTO. ZIP lookups © zippopotam.us. Always refer to the utilities directly for authoritative
+      outage information.</p>
+    </div>
+  </section>
 </main>
 
 <!-- county drill-down -->
@@ -389,42 +473,6 @@
     <div class="sub-list" id="d_list"></div>
   </div>
 </div>
-
-<footer>
-  <p><b>How it works:</b> A scheduled job collects two public feeds about every 15 minutes and publishes one
-  shared snapshot, so <em>every visitor sees the same trends</em> (you don't need to keep the page open).
-  <b>FirstEnergy</b> (Ohio Storm Center) reports customers out per county and per city/township;
-  <b>Cleveland Public Power</b> reports which distribution <em>feeders</em> are out plus an <em>approximate</em>
-  count of affected accounts (no per-customer counts). "% restored" and the restoration-rate figures are measured
-  against the <em>peak</em> observed since the current storm began; the shared history is <b>reset only on demand
-  for each new storm</b> (no automatic time-based reset). If the shared snapshot can't be reached, the page falls
-  back to live data tracked only in your browser. Click any FirstEnergy county card to drill into its
-  cities/townships, search a city or ZIP, or explore the map.</p>
-  <p><b>Reliability score:</b> Once a city has ~3 days of observations, it gets a long-run reliability rating that
-  keeps averaging in as data accumulates. The headline is <em>availability</em> — the share of customer-time with
-  power (an ASAI-style measure) — graded A+ to F, alongside how often it has any outage and its worst severity
-  seen. It's built only from the collected snapshots, so early on it reflects whatever storms happened to fall in
-  the window and stabilizes over weeks.</p>
-  <p><b>Weather events:</b> The tracker pulls active National Weather Service alerts for the area and tags each
-  outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
-  storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage — and those cities
-  are called out in the reliability panel. Storm aftermath (outages lingering after an alert expires) isn't
-  counted as blue-sky.</p>
-  <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
-  map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
-  FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
-  address. Anything saved locally stays in your browser's <code>localStorage</code>.</p>
-  <p><b>Report an outage:</b> FirstEnergy — 1-888-LIGHTSS (1-888-544-4877) /
-  <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>;
-  Cleveland Public Power — (216) 664-3156 /
-  <a href="https://www.cpp.org/Power-Outages" target="_blank" rel="noopener">cpp.org</a>.</p>
-  <p style="opacity:.7">Independent, non-commercial project. "FirstEnergy", "Ohio Edison", "The Illuminating
-  Company", and "Cleveland Public Power" are trademarks of their respective owners, used here only to identify the
-  data sources — no affiliation or endorsement is implied. CPP outage areas are approximate (accounts near an
-  out-of-service feeder) and provided by the City of Cleveland via Esri/ArcGIS. Map tiles © OpenStreetMap
-  contributors, © CARTO. ZIP lookups © zippopotam.us. Always refer to the utilities directly for authoritative
-  outage information.</p>
-</footer>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
@@ -468,6 +516,7 @@ let pastStorms = [];        // completed-storm log (from shared state)
 let reliability = {};       // long-run per-city reliability aggregates (from shared state)
 let weather = null;         // current NWS alerts mapped to NE Ohio counties
 let weatherLog = [];        // rolling log of weather events seen
+let etrStats = {};          // per-county ETR-accuracy aggregates (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let granularity = "township";
@@ -622,6 +671,7 @@ function applyShared(s){
   reliability = s.reliability || {};
   weather = s.weather || null;
   weatherLog = s.weatherLog || [];
+  etrStats = s.etrStats || {};
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -961,10 +1011,28 @@ function renderReliabilityPanel(){
   </div>`;
 }
 
+function renderEtr(){
+  const el = document.getElementById("etr");
+  if(!el) return;
+  const rows = Object.entries(etrStats).map(([name,e])=>({name,e})).filter(x => x.e.promises > 0);
+  if(!rows.length){ el.innerHTML = ""; return; }
+  const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : 0;
+  const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
+  rows.sort((a,b)=> pct(a.e) - pct(b.e));
+  const row = x => `<div class="rl-row"><span class="rl-name">${nameHtml(x.name)} County`
+    + `<small>${x.e.met}/${x.e.promises} ETRs met${x.e.missed ? ` · avg ${(x.e.sumOverrunHrs/x.e.missed).toFixed(1)}h late` : ""}</small></span>`
+    + `<span class="rl-score"><b style="color:${pct(x.e)>=80?'var(--good)':pct(x.e)>=50?'var(--warn)':'var(--bad)'}">${pct(x.e)}%</b></span></div>`;
+  el.innerHTML = `<div class="panel">
+    <h3>FirstEnergy ETR accuracy <small>restored by the promised time? · ${tot.m}/${tot.p} overall</small></h3>
+    ${rows.map(row).join("")}</div>`;
+}
+
 function renderStormLog(){
   const el = document.getElementById("stormlog");
   if(!el) return;
-  if(!pastStorms || !pastStorms.length){ el.innerHTML = ""; return; }
+  const emptyEl = document.getElementById("stormsEmpty");
+  if(!pastStorms || !pastStorms.length){ el.innerHTML = ""; if(emptyEl) emptyEl.style.display = ""; return; }
+  if(emptyEl) emptyEl.style.display = "none";
   el.innerHTML = `<div class="panel">
     <h3>Storm log <small>completed events, auto-archived as each one is restored</small></h3>
     ${pastStorms.map(s=>`<div class="sl-row">
@@ -980,6 +1048,12 @@ function render(){
   renderWeather();
   renderCPP();
   renderReliabilityPanel();
+  renderEtr();
+  const relEmpty = document.getElementById("reliabilityEmpty");
+  if(relEmpty){
+    const a = document.getElementById("reliability"), b = document.getElementById("etr");
+    relEmpty.style.display = ((a && a.innerHTML.trim()) || (b && b.innerHTML.trim())) ? "none" : "";
+  }
   renderStormLog();
   drawMap();
   buildPlaceList();
@@ -1344,15 +1418,20 @@ function buildPlaceList(){
   document.getElementById("placeList").innerHTML = [...names].sort().map(n=>`<option value="${esc(n)}"></option>`).join("");
 }
 function searchMsg(html){ document.getElementById("searchMsg").innerHTML = html; }
-function flyTo(loc, zoom, label){
-  if(!map || !loc) return;
-  map._fitOnce = true;                 // a search overrides auto-fit; respect the chosen view
-  map.setView(loc, zoom);
-  if(searchLayer){
-    searchLayer.clearLayers();
-    L.circleMarker(loc, { radius:9, color:"#fff", weight:2, fillColor:"#ff7a18", fillOpacity:0.9 })
-      .bindPopup("<b>"+esc(label)+"</b>").addTo(searchLayer).openPopup();
-  }
+function flyTo(loc, zoom, label, toMap){
+  if(!loc) return;
+  if(toMap) showTab("map");
+  const go = ()=>{
+    if(!map) return;
+    map.invalidateSize(); map._fitOnce = true;   // a search overrides auto-fit; respect the chosen view
+    map.setView(loc, zoom);
+    if(searchLayer){
+      searchLayer.clearLayers();
+      L.circleMarker(loc, { radius:9, color:"#fff", weight:2, fillColor:"#ff7a18", fillOpacity:0.9 })
+        .bindPopup("<b>"+esc(label)+"</b>").addTo(searchLayer).openPopup();
+    }
+  };
+  toMap ? setTimeout(go, 70) : go();
 }
 function doSearch(){
   const q = document.getElementById("searchInput").value.trim();
@@ -1391,21 +1470,38 @@ async function searchZip(zip){
     if(!p) throw new Error("not found");
     const loc=[parseFloat(p.latitude), parseFloat(p.longitude)];
     const city=p["place name"], st=p["state abbreviation"];
-    flyTo(loc, 12, `ZIP ${zip} — ${city}, ${st}`);
+    flyTo(loc, 12, `ZIP ${zip} — ${city}, ${st}`, true);   // jump to the Map tab and drop a pin
     let extra="";
     if(latest){
       const cu = city.toUpperCase();
       for(const c of latest.allCounties){
-        if((c.subs||[]).some(s=>s.name.toUpperCase()===cu)){ openDetail(c.name); extra = ` Opened <b>${esc(titleCase(c.name))} County</b> (contains ${esc(titleCase(city))}).`; break; }
+        if((c.subs||[]).some(s=>s.name.toUpperCase()===cu)){ extra = ` In <b>${esc(titleCase(c.name))} County</b> — ${fmt(c.out)} out.`; break; }
       }
     }
-    searchMsg(`Centered the map on <b>ZIP ${esc(zip)}</b> — ${esc(city)}, ${esc(st)}.${extra}`);
+    searchMsg(`Map centered on <b>ZIP ${esc(zip)}</b> — ${esc(city)}, ${esc(st)}.${extra}`);
   }catch(e){
     searchMsg(`Couldn't find ZIP “${esc(zip)}”. Enter a valid US ZIP code, or search by city/township name.`);
   }
 }
 
+/* ---------- tab navigation + deep links (#map, #reliability, …) ---------- */
+const TABS = ["now","map","trends","reliability","storms","about"];
+function showTab(name){
+  if(!TABS.includes(name)) name = "now";
+  document.querySelectorAll(".tab").forEach(s => s.classList.toggle("on", s.id === "tab-"+name));
+  document.querySelectorAll("#tabs button").forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false");
+  });
+  if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); } }, 30);
+  if(name === "trends") setTimeout(drawChart, 0);
+  if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
+  window.scrollTo(0, 0);
+}
+
 /* ---------- wire up ---------- */
+document.getElementById("tabs").addEventListener("click", e=>{ const b=e.target.closest("button[data-tab]"); if(b) showTab(b.dataset.tab); });
+window.addEventListener("hashchange", ()=> showTab(location.hash.slice(1)));
 document.getElementById("refreshBtn").addEventListener("click", ()=>refresh(true));
 document.getElementById("exportBtn").addEventListener("click", exportData);
 document.getElementById("searchBtn").addEventListener("click", doSearch);
@@ -1447,6 +1543,7 @@ window.addEventListener("resize", ()=>{
 
 refresh(true);
 scheduleAuto();
+showTab(location.hash.slice(1) || "now");
 </script>
 </body>
 </html>

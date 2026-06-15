@@ -109,7 +109,7 @@ async function fetchWeather(){
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
   catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
-                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[] }; }
+                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[], etrStats:{} }; }
 }
 
 (async () => {
@@ -222,6 +222,24 @@ function loadPrev(){
     });
   });
 
+  // ---- ETR accuracy per county (persistent): does FirstEnergy restore by its promised ETR? ----
+  const etrStats = structuredClone(prev.etrStats || {});
+  fe.counties.forEach(c => {
+    const e = etrStats[c.name] || (etrStats[c.name] = { promises:0, met:0, missed:0, sumOverrunHrs:0, _epActive:false, _epEtr:0 });
+    const etrMs = Date.parse(c.etr || "");        // NaN for "ETR-NULL"/missing
+    if(c.out > 0){
+      e._epActive = true;
+      if(!isNaN(etrMs)) e._epEtr = etrMs;         // remember the latest promised ETR this outage
+    } else if(e._epActive){                        // county just fully restored
+      if(e._epEtr){
+        e.promises++;
+        if(now <= e._epEtr + 15*60000) e.met++;    // restored by the promised time (15-min grace)
+        else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; }
+      }
+      e._epActive = false; e._epEtr = 0;
+    }
+  });
+
   // rolling log of every weather event seen (NWS alerts), keyed by alert id
   const weatherLog = (prev.weatherLog || []).slice();
   const wlById = new Map(weatherLog.map(w => [w.id, w]));
@@ -280,7 +298,7 @@ function loadPrev(){
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
-    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability,
+    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
     weatherLog,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt
