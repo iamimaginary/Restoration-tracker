@@ -127,6 +127,8 @@
   button:disabled { opacity:.5; cursor:default; }
   .toolbar label.toggle { font-size:13px; color:var(--muted); display:inline-flex; align-items:center; gap:6px; cursor:pointer; user-select:none; }
   .toolbar label.toggle input { accent-color: var(--accent); }
+  .toolbar select { background: var(--bg); color: var(--text); border:1px solid var(--line); border-radius: var(--r-sm); padding:7px 9px; font-size:13px; cursor:pointer; }
+  .toolbar select:focus { outline:none; border-color: var(--accent); }
   .search { display:flex; gap:0; align-items:center; }
   .search input { background: var(--bg); border:1px solid var(--line); border-right:none; color:var(--text);
     padding:9px 12px; border-radius: var(--r-sm) 0 0 var(--r-sm); font-size:13px; min-width:190px; }
@@ -281,6 +283,16 @@
       <datalist id="placeList"></datalist>
       <button type="button" id="searchBtn">Search</button>
     </div>
+    <label class="toggle">Sort
+      <select id="sortSel" aria-label="Sort counties and cities">
+        <option value="out_desc">Most out</option>
+        <option value="out_asc">Fewest out</option>
+        <option value="rate_desc">Fastest restoring</option>
+        <option value="rate_asc">Slowest / rising</option>
+        <option value="pct_desc">% restored</option>
+        <option value="name">Name A–Z</option>
+      </select>
+    </label>
     <button id="exportBtn">⬇ Export JSON</button>
   </div>
   <div id="searchMsg" class="searchmsg"></div>
@@ -695,6 +707,36 @@ function ratePlain(series, out){
   return "no recent change";
 }
 
+/* ---------- editable sorting (applies to county grid + drill-down) ---------- */
+let sortMode = (()=>{ try { return localStorage.getItem("neo_sort") || "out_desc"; } catch(e){ return "out_desc"; } })();
+function sortItems(items, kind){
+  const histOf = it => kind === "county" ? store.countyHistory[it.name] : store.cityHistory[it.id];
+  const rateOf = it => { const r = restorationRate(histOf(it)); return r ? r.perHour : null; };
+  const pctOf  = it => pctRestored(kind === "county" ? it.name : it.id, it.out);
+  const byName = (a,b) => a.name.localeCompare(b.name);
+  const arr = items.slice();
+  switch(sortMode){
+    case "out_asc":  arr.sort((a,b)=>(a.out-b.out)||byName(a,b)); break;
+    case "pct_desc": arr.sort((a,b)=>(pctOf(b)-pctOf(a))||(b.out-a.out)); break;
+    case "name":     arr.sort(byName); break;
+    case "rate_desc": // fastest restoring first; already-restored go last
+      arr.sort((a,b)=>{
+        const ka = a.out<=0 ? -Infinity : (rateOf(a) ?? -Infinity);
+        const kb = b.out<=0 ? -Infinity : (rateOf(b) ?? -Infinity);
+        return (kb-ka) || (b.out-a.out);
+      }); break;
+    case "rate_asc": // slowest / rising first (active only), restored last
+      arr.sort((a,b)=>{
+        const aA = a.out>0, bA = b.out>0;
+        if(aA !== bA) return aA ? -1 : 1;
+        if(!aA) return byName(a,b);
+        return ((rateOf(a) ?? 0)-(rateOf(b) ?? 0)) || (b.out-a.out);
+      }); break;
+    default: arr.sort((a,b)=>(b.out-a.out)||byName(a,b)); // out_desc
+  }
+  return arr;
+}
+
 /* ---------- which counties are in scope ---------- */
 function scopeCounties(){
   if(!latest) return [];
@@ -745,7 +787,7 @@ function renderFirstEnergy(){
     <div class="stat"><div class="label">${showAll?"FE Ohio Counties":"NE Ohio Counties"}</div><div class="value small">${activeCount} active · ${restoredCount} clear</div></div>`;
 
   // county cards
-  const cards = list.slice().sort((a,b)=> (b.out-a.out) || a.name.localeCompare(b.name));
+  const cards = sortItems(list, "county");
   const grid = document.getElementById("grid");
   if(!cards.length){ grid.innerHTML = `<div class="empty">No county data in the feed right now.</div>`; }
   else {
@@ -834,7 +876,7 @@ function openDetail(name){
   document.getElementById("d_sub").textContent =
     `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
     `ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out)}`;
-  const subs = (c.subs||[]).slice().sort((a,b)=> (b.out-a.out) || a.name.localeCompare(b.name));
+  const subs = sortItems(c.subs||[], "city");
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
     const st = statusOf(s.out, s.served, s.etr);
     const p = pctRestored(s.id, s.out);
@@ -932,6 +974,7 @@ function drawMap(){
     const col = markerColor(p.out, p.served, p.etr);
     const pr = pctRestored(p.key, p.out);
     const peak = store.peaks[p.key]||0;
+    const series = granularity === "county" ? store.countyHistory[p.key] : store.cityHistory[p.key];
     const m = L.circleMarker(p.loc, {
       radius:r, color:col, weight:1, fillColor:col, fillOpacity:p.out>0?0.55:0.35
     }).bindPopup(
@@ -939,6 +982,7 @@ function drawMap(){
       `<div class="pp-row"><span>Currently out</span><b>${fmt(p.out)}</b></div>`+
       `<div class="pp-row"><span>Customers served</span><b>${fmt(p.served)}</b></div>`+
       `<div class="pp-row"><span>Restored vs peak</span><b>${pr}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
+      `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, p.out)}</b></div>`+
       `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(p.etr))}</b></div>`
     );
     m.addTo(markerLayer);
@@ -1133,6 +1177,8 @@ document.getElementById("refreshBtn").addEventListener("click", ()=>refresh(true
 document.getElementById("exportBtn").addEventListener("click", exportData);
 document.getElementById("searchBtn").addEventListener("click", doSearch);
 document.getElementById("searchInput").addEventListener("keydown", e=>{ if(e.key==="Enter"){ e.preventDefault(); doSearch(); } });
+(()=>{ const sel=document.getElementById("sortSel"); if(sel){ sel.value=sortMode;
+  sel.addEventListener("change", ()=>{ sortMode=sel.value; try{localStorage.setItem("neo_sort",sortMode);}catch(e){} if(latest) render(); }); } })();
 document.getElementById("autoChk").addEventListener("change", scheduleAuto);
 document.getElementById("allChk").addEventListener("change", ()=>{ if(latest){ if(map) map._fitOnce=false; render(); } });
 document.getElementById("restoredChk").addEventListener("change", drawMap);
