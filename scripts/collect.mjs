@@ -116,7 +116,7 @@ async function fetchWeather(){
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
   catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[],
-                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[], etrStats:{}, relDay:null, relTrend:[] }; }
+                     activeStorm:null, belowSince:null, stormLog:[], reliability:{}, weather:null, weatherLog:[], etrStats:{}, etrCity:{}, relDay:null, relTrend:[] }; }
 }
 
 (async () => {
@@ -262,6 +262,19 @@ function loadPrev(){
     }
   });
 
+  // same ETR-accuracy tracking, per city/township
+  const etrCity = structuredClone(prev.etrCity || {});
+  fe.counties.forEach(c => c.subs.forEach(s => {
+    const e = etrCity[s.id] || (etrCity[s.id] = { county:c.name, name:s.name, promises:0, met:0, missed:0, sumOverrunHrs:0, _epActive:false, _epEtr:0 });
+    e.county = c.name; e.name = s.name;
+    const etrMs = Date.parse(s.etr || "");
+    if(s.out > 0){ e._epActive = true; if(!isNaN(etrMs)) e._epEtr = etrMs; }
+    else if(e._epActive){
+      if(e._epEtr){ e.promises++; if(now <= e._epEtr + 15*60000) e.met++; else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; } }
+      e._epActive = false; e._epEtr = 0;
+    }
+  }));
+
   // rolling log of every weather event seen (NWS alerts), keyed by alert id
   const weatherLog = (prev.weatherLog || []).slice();
   const wlById = new Map(weatherLog.map(w => [w.id, w]));
@@ -320,7 +333,7 @@ function loadPrev(){
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
-    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, relDay, relTrend,
+    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
     weatherLog,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt

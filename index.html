@@ -257,6 +257,8 @@
   .rl-score { text-align:right; display:flex; flex-direction:column; line-height:1.2; font-variant-numeric:tabular-nums; }
   .rl-score b { font-weight:800; }
   .rl-score small { color:var(--muted); font-size:10px; }
+  .etr-row { cursor:pointer; }
+  .etr-row:hover { background:rgba(255,122,24,.06); }
   .rl-blue { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .mycity-card { border-color: rgba(255,122,24,.45); box-shadow: 0 0 0 1px rgba(255,122,24,.15), var(--sh-2); cursor:pointer; }
   .mycity-card:hover { border-color: var(--accent); }
@@ -522,6 +524,7 @@ let reliability = {};       // long-run per-city reliability aggregates (from sh
 let weather = null;         // current NWS alerts mapped to NE Ohio counties
 let weatherLog = [];        // rolling log of weather events seen
 let etrStats = {};          // per-county ETR-accuracy aggregates (from shared state)
+let etrCity = {};           // per-city ETR-accuracy aggregates (from shared state)
 let relTrend = [];          // daily NE Ohio availability % (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
@@ -678,6 +681,7 @@ function applyShared(s){
   weather = s.weather || null;
   weatherLog = s.weatherLog || [];
   etrStats = s.etrStats || {};
+  etrCity = s.etrCity || {};
   relTrend = s.relTrend || [];
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
@@ -882,13 +886,21 @@ function relScore(r){
   };
 }
 // compact per-city reliability line for the drill-down
+function etrSuffix(id){
+  const e = etrCity[id];
+  if(!e || !e.promises) return "";
+  const pctv = Math.round(e.met / e.promises * 100);
+  return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>`;
+}
 function relLineHtml(id){
+  const etr = etrSuffix(id);
   const sc = relScore(reliability[id]);
-  if(!sc) return `<span style="color:var(--muted)">Reliability: collecting…</span>`;
-  if(sc.building) return `<span style="color:var(--muted)">Reliability: building (${sc.days.toFixed(1)}d / 3d)</span>`;
+  if(!sc) return `<span style="color:var(--muted)">Reliability: collecting…</span>${etr}`;
+  if(sc.building) return `<span style="color:var(--muted)">Reliability: building (${sc.days.toFixed(1)}d / 3d)</span>${etr}`;
   return `Reliability <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
        + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
-       + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "");
+       + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "")
+       + etr;
 }
 
 /* ---------- editable sorting (applies to county grid + drill-down) ---------- */
@@ -1054,11 +1066,11 @@ function renderEtr(){
   const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : 0;
   const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
   rows.sort((a,b)=> pct(a.e) - pct(b.e));
-  const row = x => `<div class="rl-row"><span class="rl-name">${nameHtml(x.name)} County`
+  const row = x => `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0"><span class="rl-name">${nameHtml(x.name)} County`
     + `<small>${x.e.met}/${x.e.promises} ETRs met${x.e.missed ? ` · avg ${(x.e.sumOverrunHrs/x.e.missed).toFixed(1)}h late` : ""}</small></span>`
-    + `<span class="rl-score"><b style="color:${pct(x.e)>=80?'var(--good)':pct(x.e)>=50?'var(--warn)':'var(--bad)'}">${pct(x.e)}%</b></span></div>`;
+    + `<span class="rl-score"><b style="color:${pct(x.e)>=80?'var(--good)':pct(x.e)>=50?'var(--warn)':'var(--bad)'}">${pct(x.e)}%</b> ›</span></div>`;
   el.innerHTML = `<div class="panel">
-    <h3>FirstEnergy ETR accuracy <small>restored by the promised time? · ${tot.m}/${tot.p} overall</small></h3>
+    <h3>FirstEnergy ETR accuracy <small>restored by the promised time? · ${tot.m}/${tot.p} overall · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
 }
 
@@ -1762,6 +1774,8 @@ document.getElementById("mycity").addEventListener("keydown", e=>{
   if(card && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDetail(card.dataset.county); }
 });
 document.getElementById("stormlog").addEventListener("click", e=>{ const b=e.target.closest("[data-storm]"); if(b) shareStorm(+b.dataset.storm); });
+document.getElementById("etr").addEventListener("click", e=>{ const r=e.target.closest(".etr-row[data-county]"); if(r) openDetail(r.dataset.county); });
+document.getElementById("etr").addEventListener("keydown", e=>{ const r=e.target.closest(".etr-row[data-county]"); if(r && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openDetail(r.dataset.county); } });
 document.getElementById("playSlider").addEventListener("input", e=>{
   if(playTimer){ clearInterval(playTimer); playTimer=null; document.getElementById("playBtn").textContent="▶"; }
   setPlay(+e.target.value);
