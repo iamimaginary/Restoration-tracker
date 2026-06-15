@@ -245,6 +245,8 @@
   .sub-list { max-height:55vh; overflow:auto; margin:0 -4px; padding:0 4px; }
   .sub-item { padding:10px 0; border-top:1px solid var(--line); }
   .sub-item:first-child { border-top:none; }
+  .sub-item.sub-hl { outline:2px solid var(--accent); outline-offset:3px; border-radius:8px; animation:subHl 1.8s ease; }
+  @keyframes subHl { 0%{ background:rgba(255,122,24,.30); } 100%{ background:transparent; } }
   .sub-head { display:flex; justify-content:space-between; gap:10px; font-size:14px; }
   .sub-head .snm { font-weight:600; }
   .sub-meta { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--muted); margin-top:4px; }
@@ -1174,7 +1176,7 @@ function renderEmptyError(){
 }
 
 /* ---------- county drill-down ---------- */
-function openDetail(name){
+function openDetail(name, focusId){
   const c = latest && latest.counties[name];
   if(!c) return;
   document.getElementById("d_title").textContent = titleCase(name) + " County";
@@ -1188,7 +1190,7 @@ function openDetail(name){
     const p = pctRestored(s.id, s.out);
     const peak = store.peaks[s.id]||0;
     const hasSpark = (store.cityHistory[s.id]||[]).length >= 2;
-    return `<div class="sub-item">
+    return `<div class="sub-item" data-city="${esc(s.id)}">
       <div class="sub-head"><span class="snm">${nameHtml(s.name)}</span>
         <span class="pill ${st}" style="font-size:10px">${STATUS_LABEL[st]}</span></div>
       <div class="trend-line">
@@ -1210,11 +1212,19 @@ function openDetail(name){
     document.querySelectorAll("#d_list canvas.spark").forEach(cv=>{
       sparkline(cv, store.cityHistory[cv.dataset.city] || [], "#ff9d4d");
     });
+    if(focusId){
+      const row = document.querySelector(`#d_list .sub-item[data-city="${(window.CSS&&CSS.escape)?CSS.escape(focusId):focusId}"]`);
+      if(row){
+        document.querySelectorAll("#d_list .sub-item.sub-hl").forEach(r=>r.classList.remove("sub-hl"));
+        row.classList.add("sub-hl");
+        row.scrollIntoView({ block:"center", behavior:"smooth" });
+      }
+    }
   });
   const first = detailOpen !== name;          // only (re)manage focus when newly opened
   document.getElementById("detailBg").classList.add("open");
   detailOpen = name;
-  if(first){ lastFocus = document.activeElement; requestAnimationFrame(()=>document.getElementById("d_close").focus()); }
+  if(first){ lastFocus = document.activeElement; if(!focusId) requestAnimationFrame(()=>document.getElementById("d_close").focus()); }
   requestAnimationFrame(()=>drawCountyChart(name));   // wait for modal layout before sizing canvas
 }
 function closeDetail(){
@@ -1476,34 +1486,48 @@ function flyTo(loc, zoom, label, toMap){
   };
   toMap ? setTimeout(go, 70) : go();
 }
+const PIN_BTN = ` <button class="btn pin-mini" type="button" data-pin="1">📌 Pin to Now</button>`;
 function doSearch(){
   const q = document.getElementById("searchInput").value.trim();
   if(!q){ searchMsg(""); return; }
   if(/^\d{5}$/.test(q)) searchZip(q);
   else searchByName(q);
 }
+// resolve a place name to a tracked city/township (exact, then partial)
+function findCity(placeName){
+  const cu = String(placeName||"").toUpperCase().trim();
+  if(!latest || !cu) return null;
+  let partial = null;
+  for(const c of latest.allCounties){
+    for(const s of (c.subs||[])){
+      const sn = s.name.toUpperCase();
+      if(sn === cu) return { sub:s, parent:c };
+      if(!partial && (sn.includes(cu) || cu.includes(sn))) partial = { sub:s, parent:c };
+    }
+  }
+  return partial;
+}
+// open a city's breakdown, scroll/highlight its row, pan the map, offer to pin
+function focusCity(sub, parent, msg){
+  pendingPin = { kind:"city", name:sub.name, county:parent.name, id:sub.id, label:titleCase(sub.name) };
+  flyTo(sub.loc, 12, titleCase(sub.name));        // pan the map underneath (stay on the breakdown)
+  openDetail(parent.name, sub.id);                 // open + scroll to & highlight this city
+  searchMsg(msg + PIN_BTN);
+}
 function searchByName(q){
   if(!latest){ searchMsg("Live data is still loading — try again in a moment."); return; }
   const norm = q.toUpperCase().replace(/\s+COUNTY$/,"").trim();
-  let county = latest.allCounties.find(c=>c.name===norm) || latest.allCounties.find(c=>c.name.includes(norm));
-  let sub=null, parent=null;
-  if(!county){
-    for(const c of latest.allCounties){
-      const m = (c.subs||[]).find(s=>s.name.toUpperCase()===norm) || (c.subs||[]).find(s=>s.name.toUpperCase().includes(norm));
-      if(m){ sub=m; parent=c; break; }
-    }
-  }
-  const pinBtn = ` <button class="btn pin-mini" type="button" data-pin="1">📌 Pin to Now</button>`;
+  const county = latest.allCounties.find(c=>c.name===norm) || latest.allCounties.find(c=>c.name.includes(norm));
   if(county){
     pendingPin = { kind:"county", name:county.name, label:titleCase(county.name)+" County" };
     flyTo(county.loc, 10, titleCase(county.name)+" County");
     openDetail(county.name);
-    searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.${pinBtn}`);
-  } else if(sub){
-    pendingPin = { kind:"city", name:sub.name, county:parent.name, id:sub.id, label:titleCase(sub.name) };
-    flyTo(sub.loc, 12, titleCase(sub.name));
-    openDetail(parent.name);
-    searchMsg(`Found <b>${esc(titleCase(sub.name))}</b> in ${esc(titleCase(parent.name))} County — ${fmt(sub.out)} out; opened the breakdown.${pinBtn}`);
+    searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.${PIN_BTN}`);
+    return;
+  }
+  const hit = findCity(norm);
+  if(hit){
+    focusCity(hit.sub, hit.parent, `Found <b>${esc(titleCase(hit.sub.name))}</b> in ${esc(titleCase(hit.parent.name))} County — ${fmt(hit.sub.out)} out.`);
   } else {
     pendingPin = null;
     searchMsg(`No match for “${esc(q)}” in the tracked service areas. Try a county, city/township name, or a 5-digit ZIP.`);
@@ -1517,15 +1541,14 @@ async function searchZip(zip){
     if(!p) throw new Error("not found");
     const loc=[parseFloat(p.latitude), parseFloat(p.longitude)];
     const city=p["place name"], st=p["state abbreviation"];
-    flyTo(loc, 12, `ZIP ${zip} — ${city}, ${st}`, true);   // jump to the Map tab and drop a pin
-    let extra="";
-    if(latest){
-      const cu = city.toUpperCase();
-      for(const c of latest.allCounties){
-        if((c.subs||[]).some(s=>s.name.toUpperCase()===cu)){ extra = ` In <b>${esc(titleCase(c.name))} County</b> — ${fmt(c.out)} out.`; break; }
-      }
+    const hit = findCity(city);            // 1:1 pair the ZIP's place name to a tracked city
+    if(hit){
+      focusCity(hit.sub, hit.parent, `ZIP ${esc(zip)} → <b>${esc(titleCase(hit.sub.name))}</b> (${esc(titleCase(hit.parent.name))} County) — ${fmt(hit.sub.out)} out.`);
+    } else {
+      pendingPin = null;
+      flyTo(loc, 12, `ZIP ${zip} — ${city}, ${st}`, true);   // no tracked city → center the map instead
+      searchMsg(`Map centered on <b>ZIP ${esc(zip)}</b> — ${esc(city)}, ${esc(st)}. No matching tracked city/township.`);
     }
-    searchMsg(`Map centered on <b>ZIP ${esc(zip)}</b> — ${esc(city)}, ${esc(st)}.${extra}`);
   }catch(e){
     searchMsg(`Couldn't find ZIP “${esc(zip)}”. Enter a valid US ZIP code, or search by city/township name.`);
   }
