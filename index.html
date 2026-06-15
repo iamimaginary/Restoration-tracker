@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>NE Ohio Power Restoration Tracker — FirstEnergy</title>
+<style>
+  :root {
+    --bg: #0f1722;
+    --panel: #16212e;
+    --panel-2: #1d2a3a;
+    --line: #2a3a4d;
+    --text: #e8eef5;
+    --muted: #93a4b8;
+    --accent: #ff7a18;     /* FirstEnergy-ish orange */
+    --accent-2: #ffb347;
+    --good: #2ecc71;
+    --warn: #f1c40f;
+    --bad: #e74c3c;
+    --blue: #3498db;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: radial-gradient(1200px 600px at 70% -10%, #1c2b3d 0%, var(--bg) 55%);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .logo {
+    width: 46px; height: 46px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 22px; color: #1a1208;
+    box-shadow: 0 6px 18px rgba(255,122,24,.35);
+  }
+  h1 { font-size: 20px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .spacer { flex: 1; }
+  .updated { font-size: 12px; color: var(--muted); text-align: right; }
+  .updated b { color: var(--text); }
+
+  main { padding: 22px 24px 60px; max-width: 1200px; margin: 0 auto; }
+
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+    margin-bottom: 22px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px 18px;
+  }
+  .stat .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+  .stat .value { font-size: 28px; font-weight: 800; margin-top: 6px; }
+  .stat .value.small { font-size: 20px; }
+
+  .bar {
+    height: 10px; border-radius: 999px; background: var(--panel-2);
+    overflow: hidden; border: 1px solid var(--line); margin-top: 10px;
+  }
+  .bar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--good), #58d68d); }
+
+  .toolbar {
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    margin-bottom: 16px;
+  }
+  button, .btn {
+    background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+    padding: 9px 14px; border-radius: 10px; cursor: pointer; font-size: 13px;
+    transition: .15s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  }
+  button:hover, .btn:hover { border-color: var(--accent); color: #fff; }
+  button.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #1a1208; border: none; font-weight: 700; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    position: relative;
+  }
+  .card h3 { margin: 0 0 2px; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .util { font-size: 11px; color: var(--muted); }
+  .pill {
+    font-size: 11px; padding: 3px 8px; border-radius: 999px; font-weight: 700;
+    border: 1px solid transparent;
+  }
+  .pill.restored { background: rgba(46,204,113,.15); color: var(--good); border-color: rgba(46,204,113,.3); }
+  .pill.progress { background: rgba(52,152,219,.15); color: var(--blue); border-color: rgba(52,152,219,.3); }
+  .pill.assessing { background: rgba(241,196,15,.15); color: var(--warn); border-color: rgba(241,196,15,.3); }
+  .pill.major { background: rgba(231,76,60,.15); color: var(--bad); border-color: rgba(231,76,60,.3); }
+
+  .row { display: flex; justify-content: space-between; font-size: 13px; margin-top: 10px; color: var(--muted); }
+  .row b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .pct { font-size: 13px; font-weight: 700; }
+  .card .actions { margin-top: 12px; display: flex; gap: 8px; }
+  .card .actions button { padding: 6px 10px; font-size: 12px; }
+
+  .chartwrap {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 16px; margin: 22px 0;
+  }
+  .chartwrap h3 { margin: 0 0 12px; font-size: 15px; }
+  canvas { width: 100%; height: 220px; display: block; }
+
+  /* modal */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none;
+    place-items: center; padding: 20px; z-index: 50;
+  }
+  .modal-bg.open { display: grid; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    width: 100%; max-width: 440px; padding: 22px;
+  }
+  .modal h2 { margin: 0 0 16px; font-size: 18px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  input, select, textarea {
+    width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    padding: 9px 11px; border-radius: 9px; font-size: 14px; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+
+  footer { color: var(--muted); font-size: 12px; padding: 0 24px 40px; max-width: 1200px; margin: 0 auto; line-height: 1.6; }
+  footer a { color: var(--accent-2); }
+  .empty { color: var(--muted); padding: 40px; text-align: center; border: 1px dashed var(--line); border-radius: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">⚡</div>
+  <div>
+    <h1>Northeast Ohio Power Restoration Tracker</h1>
+    <div class="sub">FirstEnergy service area — Ohio Edison &amp; The Illuminating Company</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="updated">
+    Last updated<br /><b id="lastUpdated">—</b>
+  </div>
+</header>
+
+<main>
+  <section class="summary" id="summary"></section>
+
+  <div class="toolbar">
+    <button class="primary" onclick="openModal()">+ Add / Update County</button>
+    <button onclick="snapshot()">📌 Save Snapshot</button>
+    <button onclick="exportData()">⬇ Export JSON</button>
+    <button onclick="document.getElementById('importFile').click()">⬆ Import JSON</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none" onchange="importData(event)" />
+    <a class="btn" href="https://outages.firstenergycorp.com/oh.html" target="_blank" rel="noopener">🗺 Official Outage Map ↗</a>
+    <button class="danger" onclick="resetAll()">Reset</button>
+  </div>
+
+  <div class="chartwrap">
+    <h3>Total Customers Without Power — Restoration Trend</h3>
+    <canvas id="trendChart"></canvas>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2 id="modalTitle">Add / Update County</h2>
+    <label>County</label>
+    <select id="f_name"></select>
+    <label>Utility</label>
+    <select id="f_util">
+      <option>Ohio Edison</option>
+      <option>The Illuminating Company</option>
+      <option>Toledo Edison</option>
+    </select>
+    <div class="form-row">
+      <div>
+        <label>Customers served (total)</label>
+        <input type="number" id="f_served" min="0" placeholder="e.g. 240000" />
+      </div>
+      <div>
+        <label>Peak customers out</label>
+        <input type="number" id="f_peak" min="0" placeholder="e.g. 85000" />
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Currently out</label>
+        <input type="number" id="f_out" min="0" placeholder="e.g. 12000" />
+      </div>
+      <div>
+        <label>Status</label>
+        <select id="f_status">
+          <option value="major">Major outage</option>
+          <option value="assessing">Assessing damage</option>
+          <option value="progress">Restoration in progress</option>
+          <option value="restored">Restored</option>
+        </select>
+      </div>
+    </div>
+    <label>Estimated restoration (ETR)</label>
+    <input type="text" id="f_etr" placeholder="e.g. Jun 16, 11:00 PM" />
+    <label>Notes</label>
+    <textarea id="f_notes" rows="2" placeholder="Crew status, hardest-hit areas..."></textarea>
+    <div class="modal-actions">
+      <button onclick="closeModal()">Cancel</button>
+      <button class="primary" onclick="saveCounty()">Save</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <p><b>About this tracker:</b> A self-contained dashboard for monitoring FirstEnergy power-restoration
+  progress across Northeast Ohio counties. All data is entered/imported and stored locally in your browser
+  (<code>localStorage</code>) — nothing is sent anywhere.</p>
+  <p><b>Live official data:</b> FirstEnergy's real-time outage feed cannot be embedded directly due to
+  cross-origin (CORS) restrictions. For live numbers, use the
+  <a href="https://outages.firstenergycorp.com/oh.html" target="_blank" rel="noopener">official Ohio outage map</a>
+  or report an outage at <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>
+  / call 1-888-LIGHTSS (1-888-544-4877). Update the cards here as new figures are published.</p>
+</footer>
+
+<script>
+const COUNTIES = {
+  "Cuyahoga":   "The Illuminating Company",
+  "Lake":       "The Illuminating Company",
+  "Geauga":     "The Illuminating Company",
+  "Ashtabula":  "The Illuminating Company",
+  "Lorain":     "Ohio Edison",
+  "Medina":     "Ohio Edison",
+  "Summit":     "Ohio Edison",
+  "Portage":    "Ohio Edison",
+  "Stark":      "Ohio Edison",
+  "Wayne":      "Ohio Edison",
+  "Trumbull":   "Ohio Edison",
+  "Mahoning":   "Ohio Edison",
+  "Columbiana": "Ohio Edison"
+};
+const STATUS_LABEL = { major:"Major outage", assessing:"Assessing damage", progress:"In progress", restored:"Restored" };
+const KEY = "neo_restoration_v1";
+
+let state = load();
+
+function load() {
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {}
+  return { counties: {}, history: [], lastUpdated: null };
+}
+function persist() {
+  state.lastUpdated = Date.now();
+  localStorage.setItem(KEY, JSON.stringify(state));
+  render();
+}
+
+function pctRestored(c) {
+  if (!c.peak || c.peak <= 0) return c.out > 0 ? 0 : 100;
+  return Math.max(0, Math.min(100, Math.round((c.peak - c.out) / c.peak * 100)));
+}
+
+function totals() {
+  const list = Object.values(state.counties);
+  return list.reduce((a, c) => {
+    a.served += +c.served || 0;
+    a.peak += +c.peak || 0;
+    a.out += +c.out || 0;
+    if (c.status === "restored") a.restoredCounties++;
+    return a;
+  }, { served: 0, peak: 0, out: 0, restoredCounties: 0, count: list.length });
+}
+
+function fmt(n) { return (n || 0).toLocaleString("en-US"); }
+function timeStr(ts) {
+  if (!ts) return "—";
+  return new Date(ts).toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric", minute:"2-digit" });
+}
+
+/* ---------- Rendering ---------- */
+function render() {
+  document.getElementById("lastUpdated").textContent = timeStr(state.lastUpdated);
+
+  const t = totals();
+  const overallPct = t.peak > 0 ? Math.round((t.peak - t.out) / t.peak * 100) : (t.count ? 100 : 0);
+  document.getElementById("summary").innerHTML = `
+    <div class="stat">
+      <div class="label">Customers Without Power</div>
+      <div class="value">${fmt(t.out)}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Peak Outage</div>
+      <div class="value">${fmt(t.peak)}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Restored So Far</div>
+      <div class="value">${fmt(Math.max(0, t.peak - t.out))}</div>
+    </div>
+    <div class="stat">
+      <div class="label">Overall Restored</div>
+      <div class="value">${overallPct}%</div>
+      <div class="bar"><span style="width:${overallPct}%"></span></div>
+    </div>
+    <div class="stat">
+      <div class="label">Counties Fully Restored</div>
+      <div class="value small">${t.restoredCounties} / ${t.count}</div>
+    </div>`;
+
+  const grid = document.getElementById("grid");
+  const entries = Object.entries(state.counties);
+  if (!entries.length) {
+    grid.innerHTML = `<div class="empty">No county data yet. Click <b>“+ Add / Update County”</b> to start tracking,
+      or import a JSON snapshot. Pull current figures from the official outage map.</div>`;
+  } else {
+    entries.sort((a,b) => (b[1].out||0) - (a[1].out||0));
+    grid.innerHTML = entries.map(([name, c]) => {
+      const p = pctRestored(c);
+      return `<div class="card">
+        <h3>${name} <span class="pill ${c.status}">${STATUS_LABEL[c.status]||c.status}</span></h3>
+        <div class="util">${c.util || COUNTIES[name] || ""}</div>
+        <div class="bar"><span style="width:${p}%"></span></div>
+        <div class="row"><span>Restored</span><b class="pct">${p}%</b></div>
+        <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
+        <div class="row"><span>Peak / Served</span><b>${fmt(c.peak)} / ${fmt(c.served)}</b></div>
+        <div class="row"><span>ETR</span><b>${c.etr || "—"}</b></div>
+        ${c.notes ? `<div class="row"><span style="max-width:100%">${c.notes}</span></div>` : ""}
+        <div class="actions">
+          <button onclick="openModal('${name.replace(/'/g,"\\'")}')">Edit</button>
+          <button class="danger" onclick="removeCounty('${name.replace(/'/g,"\\'")}')">Remove</button>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  drawChart();
+}
+
+/* ---------- Chart (dependency-free canvas) ---------- */
+function drawChart() {
+  const canvas = document.getElementById("trendChart");
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = 220;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+
+  const data = state.history;
+  const pad = { l: 56, r: 16, t: 14, b: 26 };
+  const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
+
+  if (data.length < 1) {
+    ctx.fillStyle = "#93a4b8"; ctx.font = "13px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("Save snapshots over time to chart the restoration trend.", w/2, h/2);
+    return;
+  }
+
+  const maxV = Math.max(...data.map(d => d.out), 1);
+  const niceMax = Math.ceil(maxV / 5) * 5 || 5;
+
+  // grid + y labels
+  ctx.strokeStyle = "#2a3a4d"; ctx.fillStyle = "#93a4b8";
+  ctx.font = "11px sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + plotH * i / 4;
+    const val = Math.round(niceMax * (1 - i / 4));
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    ctx.fillText(val.toLocaleString(), pad.l - 8, y);
+  }
+
+  const x = i => data.length === 1 ? pad.l + plotW/2 : pad.l + plotW * i / (data.length - 1);
+  const y = v => pad.t + plotH * (1 - v / niceMax);
+
+  // area fill
+  ctx.beginPath();
+  ctx.moveTo(x(0), y(data[0].out));
+  data.forEach((d, i) => ctx.lineTo(x(i), y(d.out)));
+  ctx.lineTo(x(data.length - 1), pad.t + plotH);
+  ctx.lineTo(x(0), pad.t + plotH);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
+  grad.addColorStop(0, "rgba(255,122,24,.35)");
+  grad.addColorStop(1, "rgba(255,122,24,0)");
+  ctx.fillStyle = grad; ctx.fill();
+
+  // line
+  ctx.beginPath();
+  data.forEach((d, i) => i ? ctx.lineTo(x(i), y(d.out)) : ctx.moveTo(x(i), y(d.out)));
+  ctx.strokeStyle = "#ff7a18"; ctx.lineWidth = 2.5; ctx.stroke();
+
+  // points + x labels
+  ctx.fillStyle = "#ffb347";
+  data.forEach((d, i) => { ctx.beginPath(); ctx.arc(x(i), y(d.out), 3, 0, Math.PI*2); ctx.fill(); });
+  ctx.fillStyle = "#93a4b8"; ctx.textAlign = "center"; ctx.textBaseline = "top";
+  const step = Math.ceil(data.length / 6);
+  data.forEach((d, i) => {
+    if (i % step === 0 || i === data.length - 1) {
+      const lbl = new Date(d.t).toLocaleString("en-US", { month:"short", day:"numeric", hour:"numeric" });
+      ctx.fillText(lbl, x(i), pad.t + plotH + 6);
+    }
+  });
+}
+
+/* ---------- Actions ---------- */
+let editing = null;
+function openModal(name) {
+  editing = name || null;
+  const sel = document.getElementById("f_name");
+  sel.innerHTML = Object.keys(COUNTIES).map(n => `<option>${n}</option>`).join("");
+  const c = name ? state.counties[name] : null;
+  document.getElementById("modalTitle").textContent = name ? `Update ${name}` : "Add / Update County";
+  sel.value = name || Object.keys(COUNTIES)[0];
+  sel.disabled = !!name;
+  document.getElementById("f_util").value   = c?.util || COUNTIES[sel.value];
+  document.getElementById("f_served").value = c?.served ?? "";
+  document.getElementById("f_peak").value   = c?.peak ?? "";
+  document.getElementById("f_out").value    = c?.out ?? "";
+  document.getElementById("f_status").value = c?.status || "major";
+  document.getElementById("f_etr").value    = c?.etr || "";
+  document.getElementById("f_notes").value  = c?.notes || "";
+  document.getElementById("modalBg").classList.add("open");
+}
+document.getElementById("f_name").addEventListener("change", e => {
+  document.getElementById("f_util").value = COUNTIES[e.target.value];
+});
+function closeModal() { document.getElementById("modalBg").classList.remove("open"); }
+
+function saveCounty() {
+  const name = document.getElementById("f_name").value;
+  const out = +document.getElementById("f_out").value || 0;
+  let peak = +document.getElementById("f_peak").value || 0;
+  if (out > peak) peak = out; // peak can't be below current
+  state.counties[name] = {
+    util: document.getElementById("f_util").value,
+    served: +document.getElementById("f_served").value || 0,
+    peak: peak,
+    out: out,
+    status: document.getElementById("f_status").value,
+    etr: document.getElementById("f_etr").value.trim(),
+    notes: document.getElementById("f_notes").value.trim()
+  };
+  closeModal();
+  persist();
+}
+function removeCounty(name) {
+  if (confirm(`Remove ${name}?`)) { delete state.counties[name]; persist(); }
+}
+function snapshot() {
+  const t = totals();
+  state.history.push({ t: Date.now(), out: t.out, restored: Math.max(0, t.peak - t.out) });
+  if (state.history.length > 500) state.history.shift();
+  persist();
+}
+function resetAll() {
+  if (confirm("Erase all tracked data and snapshots?")) {
+    state = { counties: {}, history: [], lastUpdated: null };
+    persist();
+  }
+}
+function exportData() {
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `neo-restoration-${new Date().toISOString().slice(0,16).replace(/[:T]/g,"-")}.json`;
+  a.click();
+}
+function importData(ev) {
+  const file = ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const obj = JSON.parse(reader.result);
+      if (obj && obj.counties) { state = { counties: obj.counties, history: obj.history || [], lastUpdated: obj.lastUpdated || null }; persist(); }
+      else alert("That file doesn't look like a tracker export.");
+    } catch (e) { alert("Could not parse JSON: " + e.message); }
+  };
+  reader.readAsText(file);
+  ev.target.value = "";
+}
+
+window.addEventListener("resize", drawChart);
+document.getElementById("modalBg").addEventListener("click", e => { if (e.target.id === "modalBg") closeModal(); });
+render();
+</script>
+</body>
+</html>
