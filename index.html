@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://kubra.io https://www.arcgis.com https://services3.arcgis.com https://api.zippopotam.us; base-uri 'none'; form-action 'none'" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://kubra.io https://www.arcgis.com https://services3.arcgis.com https://api.zippopotam.us https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'" />
 <meta name="description" content="Unofficial live dashboard tracking power-restoration progress across Northeast Ohio, using FirstEnergy's and Cleveland Public Power's public outage feeds. Not affiliated with either utility." />
 <meta name="robots" content="noindex" />
 <meta name="theme-color" content="#0f1722" />
@@ -60,6 +60,7 @@
   .spacer { flex: 1; }
   .updated { font-size: 11.5px; color: var(--muted); text-align: right; line-height: 1.5; }
   .updated b { color: var(--text); }
+  .srcmode { font-size:10.5px; color:var(--muted); opacity:.85; }
   #liveState { display:inline-flex; align-items:center; gap:6px; font-weight:600; font-size:11px;
     text-transform:uppercase; letter-spacing:.4px; padding:3px 9px 3px 7px; border-radius:999px;
     border:1px solid var(--line); background:var(--panel-2); color:var(--muted); }
@@ -246,7 +247,8 @@
   <div class="spacer"></div>
   <div class="updated" role="status" aria-live="polite">
     <span id="liveState"><span class="dot stale"></span>Connecting…</span><br />
-    Data as of <b id="lastUpdated">—</b>
+    Data as of <b id="lastUpdated">—</b><br />
+    <span id="srcMode" class="srcmode"></span>
   </div>
 </header>
 
@@ -342,17 +344,19 @@
 </div>
 
 <footer>
-  <p><b>How it works:</b> Reads two public feeds directly in your browser. <b>FirstEnergy</b> (Ohio Storm Center,
-  refreshed ~every 15 min) reports customers out per county and per city/township. <b>Cleveland Public Power</b>
-  reports which distribution <em>feeders</em> are out of service plus an <em>approximate</em> count of affected
-  accounts (no per-customer counts). "% restored" is measured against the <em>peak</em> each source has shown
-  <em>since you opened the page</em>, so a fresh visit mid-storm starts near 0% and the curves fall as you keep
-  it open. Click any FirstEnergy county card to drill into its cities/townships, search for a city or ZIP, or
-  explore the map.</p>
-  <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. Observed peaks and trend history stay on your
-  device in <code>localStorage</code> and are never sent anywhere. Live data, map tiles, and ZIP lookups are
-  fetched from FirstEnergy (kubra.io), Cleveland Public Power's ArcGIS, OpenStreetMap/CARTO, and zippopotam.us,
-  which (like any website) see your IP address.</p>
+  <p><b>How it works:</b> A scheduled job collects two public feeds about every 15 minutes and publishes one
+  shared snapshot, so <em>every visitor sees the same trends</em> (you don't need to keep the page open).
+  <b>FirstEnergy</b> (Ohio Storm Center) reports customers out per county and per city/township;
+  <b>Cleveland Public Power</b> reports which distribution <em>feeders</em> are out plus an <em>approximate</em>
+  count of affected accounts (no per-customer counts). "% restored" is measured against the <em>peak</em>
+  observed since the current storm began, and the shared history <b>auto-resets about 24 hours after the last
+  customer is restored</b>. If the shared snapshot can't be reached, the page falls back to live data tracked
+  only in your browser. Click any FirstEnergy county card to drill into its cities/townships, search a city or
+  ZIP, or explore the map.</p>
+  <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
+  map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
+  FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
+  address. Anything saved locally stays in your browser's <code>localStorage</code>.</p>
   <p><b>Report an outage:</b> FirstEnergy — 1-888-LIGHTSS (1-888-544-4877) /
   <a href="https://www.firstenergycorp.com/" target="_blank" rel="noopener">firstenergycorp.com</a>;
   Cleveland Public Power — (216) 664-3156 /
@@ -380,6 +384,12 @@ const VIEW     = "db9c3f02-0a06-4672-a357-0f676eb75bfa";
 const CPP_WEBMAP = "88719296c67e4874b0bdd2abd91658b2";
 const CPP_ITEM   = id => `https://www.arcgis.com/sharing/rest/content/items/${id}`;
 const CPP_FS0    = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/CPPFeederAreas_BufferXMBuff100v3/FeatureServer/0";
+
+/* Shared, server-collected state (GitHub Action commits this ~every 15 min) so
+   every visitor sees the same trends. If it isn't reachable yet, the page falls
+   back to fetching the live feeds directly in this browser. */
+const STATE_URL = "https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/claude/first-energy-restoration-tracker-m185by/data/state.json";
+let sharedMode = false;
 
 /* Canonical Northeast Ohio counties + serving FirstEnergy utility (feed names are UPPER) */
 const NEO = {
@@ -520,12 +530,56 @@ async function fetchCPP(){
   return { updatedAt, accounts, feeders, features };
 }
 
+/* ---------- shared state (everyone sees the same thing) ---------- */
+async function loadShared(){
+  const s = await fetch(STATE_URL + "?t=" + Math.floor(Date.now()/60000), {cache:"no-store"})
+    .then(r=>{ if(!r.ok) throw new Error("state "+r.status); return r.json(); });
+  if(!s || !s.fe || !Array.isArray(s.fe.counties)) throw new Error("unexpected state shape");
+  applyShared(s);
+  try { localStorage.setItem("neo_shared_cache", JSON.stringify(s)); } catch(e){}
+  return s;
+}
+function applyShared(s){
+  const counties = {}, allCounties = [];
+  s.fe.counties.forEach(c=>{
+    const rec = { name:c.name, out:c.out||0, served:c.served||0, etr:c.etr||null, loc:c.loc||null,
+      subs:(c.subs||[]).map(x=>({ id:x.id, name:x.name, out:x.out||0, served:x.served||0, etr:x.etr||null, loc:x.loc||null })) };
+    counties[c.name] = rec; allCounties.push(rec);
+  });
+  latest = { updatedAt: s.fe.updatedAt, counties, allCounties };
+  latestCPP = s.cpp ? { updatedAt:s.cpp.updatedAt, accounts:s.cpp.accounts||0, feeders:s.cpp.feeders||[], features:s.cpp.features||[] } : null;
+  store.peaks = s.peaks || {};
+  store.history = s.history || [];
+  store.countyHistory = s.countyHistory || {};
+  store.cityHistory = s.cityHistory || {};
+  store.cppPeak = s.cppPeak || 0;
+  store.cppHistory = s.cppHistory || [];
+}
+function setSrcMode(txt){ const el=document.getElementById("srcMode"); if(el) el.textContent = txt; }
+
 /* ---------- refresh cycle ---------- */
 async function refresh(manual){
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true; btn.textContent = "↻ Updating…";
   setLive("stale","Updating…");
 
+  // Prefer the shared, server-collected snapshot so all visitors see identical data.
+  try {
+    const s = await loadShared();
+    sharedMode = true;
+    hideBanner(); setLive("live","Live");
+    setSrcMode("shared feed · collected ~every 15 min" + (s.zeroSince ? " · awaiting reset" : ""));
+    render();
+    btn.disabled = false; btn.textContent = "↻ Refresh now";
+    return;
+  } catch(e){ /* shared not available yet — fall back to live, per-browser */ }
+  sharedMode = false;
+  setSrcMode("live feed · this browser");
+  await refreshLive();
+  btn.disabled = false; btn.textContent = "↻ Refresh now";
+}
+
+async function refreshLive(){
   // Both sources are fetched independently — one failing never blocks the other.
   const [feR, cppR] = await Promise.allSettled([fetchLive(), fetchCPP()]);
 
@@ -574,7 +628,6 @@ async function refresh(manual){
 
   persist();
   if(latest || latestCPP) render(); else renderEmptyError();
-  btn.disabled = false; btn.textContent = "↻ Refresh now";
 }
 function neoTotalOut(data){ return Object.keys(NEO).reduce((s,n)=> s + (data.counties[n] ? data.counties[n].out : 0), 0); }
 
@@ -634,7 +687,7 @@ function renderFirstEnergy(){
     <div class="stat stat--primary"><div class="label">Customers Without Power</div><div class="value">${fmt(totOut)}</div>${deltaHtml}</div>
     <div class="stat"><div class="label">Peak Observed</div><div class="value">${fmt(totPeak)}</div></div>
     <div class="stat"><div class="label">Restored So Far</div><div class="value">${fmt(Math.max(0,totPeak-totOut))}</div></div>
-    <div class="stat"><div class="label">Overall Restored</div><div class="value">${overallPct}%</div><div class="bar"><span style="width:${overallPct}%"></span></div><div class="note">measured vs the peak seen since you opened this page</div></div>
+    <div class="stat"><div class="label">Overall Restored</div><div class="value">${overallPct}%</div><div class="bar"><span style="width:${overallPct}%"></span></div><div class="note">${sharedMode ? "vs the storm peak (shared, collected server-side)" : "vs the peak seen since you opened this page"}</div></div>
     <div class="stat"><div class="label">${showAll?"FE Ohio Counties":"NE Ohio Counties"}</div><div class="value small">${activeCount} active · ${restoredCount} clear</div></div>`;
 
   // county cards

@@ -1,0 +1,53 @@
+name: Collect outage data
+
+# NOTE: scheduled workflows only run from the repository's DEFAULT branch.
+# For this to fire, set the default branch to
+# claude/first-energy-restoration-tracker-m185by (Settings → Branches) and
+# make sure Actions are enabled (Settings → Actions → General).
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # roughly every 15 minutes (GitHub may delay during load)
+  workflow_dispatch:          # allows a manual run to seed the data immediately
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-outage-data
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout data branch
+        uses: actions/checkout@v4
+        with:
+          ref: claude/first-energy-restoration-tracker-m185by
+          fetch-depth: 1
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Collect snapshot
+        run: node scripts/collect.mjs
+
+      - name: Commit shared state
+        run: |
+          git config user.name "outage-tracker-bot"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "No data change this cycle."
+            exit 0
+          fi
+          git commit -m "data: outage snapshot $(date -u +%FT%TZ)"
+          # retry push a few times in case the branch advanced meanwhile
+          for i in 1 2 3; do
+            git pull --rebase origin claude/first-energy-restoration-tracker-m185by && \
+            git push origin HEAD:claude/first-energy-restoration-tracker-m185by && break
+            echo "push attempt $i failed, retrying…"; sleep 5
+          done
