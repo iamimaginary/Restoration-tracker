@@ -196,6 +196,8 @@
   <div class="modal">
     <h2><span id="d_title">County</span><span class="x" onclick="closeDetail()">×</span></h2>
     <div class="msub" id="d_sub"></div>
+    <div style="font-size:12px;color:var(--muted);margin:2px 0 6px">Restoration trend — this county</div>
+    <canvas id="d_chart" style="height:170px;display:block;margin-bottom:12px"></canvas>
     <div class="sub-list" id="d_list"></div>
   </div>
 </div>
@@ -237,14 +239,20 @@ let latest = null;
 let timer = null;
 let map = null, markerLayer = null;
 let granularity = "township";
+let detailOpen = null;
 
 /* ---------- persistence ---------- */
 function loadStore(){
-  try { const r = localStorage.getItem(KEY); if (r) return JSON.parse(r); } catch(e){}
-  // migrate county peaks from v2 if present
-  let peaks = {};
-  try { const old = JSON.parse(localStorage.getItem("neo_restoration_v2")||"null"); if(old&&old.peaks) peaks = old.peaks; } catch(e){}
-  return { peaks, history:[], lastUpdatedAt:0 };
+  let s = null;
+  try { const r = localStorage.getItem(KEY); if (r) s = JSON.parse(r); } catch(e){}
+  if(!s){
+    // migrate county peaks from v2 if present
+    let peaks = {};
+    try { const old = JSON.parse(localStorage.getItem("neo_restoration_v2")||"null"); if(old&&old.peaks) peaks = old.peaks; } catch(e){}
+    s = { peaks, history:[], lastUpdatedAt:0 };
+  }
+  if(!s.countyHistory) s.countyHistory = {};   // { COUNTY: [{t,out}] }
+  return s;
 }
 function persist(){ try { localStorage.setItem(KEY, JSON.stringify(store)); } catch(e){} }
 
@@ -330,6 +338,14 @@ async function refresh(manual){
     if(data.updatedAt !== store.lastUpdatedAt){
       store.history.push({ t: data.updatedAt, out: neoOut });
       if(store.history.length > 800) store.history.shift();
+      // per-county series — kept once a county has shown an outage (or already has history)
+      data.allCounties.forEach(c=>{
+        if(c.out>0 || store.countyHistory[c.name]){
+          const arr = (store.countyHistory[c.name] = store.countyHistory[c.name] || []);
+          arr.push({ t:data.updatedAt, out:c.out });
+          if(arr.length > 500) arr.shift();
+        }
+      });
       store.lastUpdatedAt = data.updatedAt;
     }
     persist();
@@ -411,6 +427,7 @@ function render(){
   }
   drawChart();
   drawMap();
+  if(detailOpen && latest.counties[detailOpen]) openDetail(detailOpen);   // keep open drill-down fresh
 }
 
 function renderEmptyError(){
@@ -443,8 +460,10 @@ function openDetail(name){
     </div>`;
   }).join("") : `<div class="sub-meta">No sub-area detail reported for this county.</div>`;
   document.getElementById("detailBg").classList.add("open");
+  detailOpen = name;
+  requestAnimationFrame(()=>drawCountyChart(name));   // wait for modal layout before sizing canvas
 }
-function closeDetail(){ document.getElementById("detailBg").classList.remove("open"); }
+function closeDetail(){ document.getElementById("detailBg").classList.remove("open"); detailOpen = null; }
 
 /* ---------- map ---------- */
 function initMap(){
@@ -502,25 +521,21 @@ function drawMap(){
   setTimeout(()=>map.invalidateSize(), 0);
 }
 
-/* ---------- trend chart ---------- */
-function drawChart(){
-  const canvas = document.getElementById("trendChart");
+/* ---------- reusable line chart (dependency-free canvas) ---------- */
+function lineChart(canvas, data, color, emptyMsg){
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
-  const w = canvas.clientWidth, h = 220;
+  const w = canvas.clientWidth || (canvas.parentElement ? canvas.parentElement.clientWidth : 320) || 320;
+  const h = canvas.clientHeight || 200;
   canvas.width = w*dpr; canvas.height = h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.clearRect(0,0,w,h);
-  const data = store.history;
-  const note = document.getElementById("trendNote");
-  const pad = { l:58, r:16, t:14, b:26 };
+  const pad = { l:56, r:14, t:12, b:24 };
   const plotW = w-pad.l-pad.r, plotH = h-pad.t-pad.b;
-  if(data.length < 2){
-    note.textContent = "building from live snapshots…";
-    ctx.fillStyle="#93a4b8"; ctx.font="13px sans-serif"; ctx.textAlign="center";
-    ctx.fillText("Collecting live snapshots — the trend line appears after a couple of updates.", w/2, h/2);
+  if(!data || data.length < 2){
+    ctx.fillStyle="#93a4b8"; ctx.font="12px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    ctx.fillText(emptyMsg, w/2, h/2);
     return;
   }
-  note.textContent = data.length+" snapshots";
   const maxV = Math.max(...data.map(d=>d.out), 1);
   const niceMax = Math.pow(10, Math.floor(Math.log10(maxV)));
   const top = Math.ceil(maxV/niceMax)*niceMax || 1;
@@ -531,12 +546,25 @@ function drawChart(){
   ctx.beginPath(); ctx.moveTo(x(0), y(data[0].out)); data.forEach((d,i)=>ctx.lineTo(x(i), y(d.out)));
   ctx.lineTo(x(data.length-1), pad.t+plotH); ctx.lineTo(x(0), pad.t+plotH); ctx.closePath();
   const g = ctx.createLinearGradient(0,pad.t,0,pad.t+plotH);
-  g.addColorStop(0,"rgba(255,122,24,.35)"); g.addColorStop(1,"rgba(255,122,24,0)"); ctx.fillStyle=g; ctx.fill();
-  ctx.beginPath(); data.forEach((d,i)=> i?ctx.lineTo(x(i),y(d.out)):ctx.moveTo(x(i),y(d.out))); ctx.strokeStyle="#ff7a18"; ctx.lineWidth=2.5; ctx.stroke();
-  ctx.fillStyle="#ffb347"; data.forEach((d,i)=>{ ctx.beginPath(); ctx.arc(x(i),y(d.out),2.5,0,Math.PI*2); ctx.fill(); });
+  g.addColorStop(0,color.fill); g.addColorStop(1,color.fill0); ctx.fillStyle=g; ctx.fill();
+  ctx.beginPath(); data.forEach((d,i)=> i?ctx.lineTo(x(i),y(d.out)):ctx.moveTo(x(i),y(d.out))); ctx.strokeStyle=color.line; ctx.lineWidth=2.4; ctx.stroke();
+  ctx.fillStyle=color.dot; data.forEach((d,i)=>{ ctx.beginPath(); ctx.arc(x(i),y(d.out),2.3,0,Math.PI*2); ctx.fill(); });
   ctx.fillStyle="#93a4b8"; ctx.textAlign="center"; ctx.textBaseline="top";
   const step = Math.ceil(data.length/6);
   data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText(new Date(d.t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}), x(i), pad.t+plotH+6); } });
+}
+const ORANGE = {fill:"rgba(255,122,24,.35)", fill0:"rgba(255,122,24,0)", line:"#ff7a18", dot:"#ffb347"};
+const BLUE   = {fill:"rgba(52,152,219,.32)", fill0:"rgba(52,152,219,0)", line:"#3498db", dot:"#7fc4ec"};
+
+function drawChart(){
+  const data = store.history;
+  document.getElementById("trendNote").textContent = data.length<2 ? "building from live snapshots…" : data.length+" snapshots";
+  lineChart(document.getElementById("trendChart"), data, ORANGE,
+    "Collecting live snapshots — the trend line appears after a couple of updates.");
+}
+function drawCountyChart(name){
+  lineChart(document.getElementById("d_chart"), store.countyHistory[name] || [], BLUE,
+    "This county's curve appears once a few live snapshots are collected.");
 }
 
 /* ---------- toolbar ---------- */
@@ -568,7 +596,7 @@ document.getElementById("granSeg").addEventListener("click", e=>{
   drawMap();
 });
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") closeDetail(); });
-window.addEventListener("resize", ()=>{ if(latest) drawChart(); });
+window.addEventListener("resize", ()=>{ if(latest) drawChart(); if(detailOpen) drawCountyChart(detailOpen); });
 
 refresh(true);
 scheduleAuto();
