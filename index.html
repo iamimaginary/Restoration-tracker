@@ -726,11 +726,47 @@ function durStr(h){
   const d = Math.round(h/24*10)/10;
   return d + (d === 1 ? " day" : " days");
 }
+// Time-to-clear estimate that sharpens as the storm progresses. Power restoration
+// decelerates (fast bulk, slow tail), so a straight line stays wrong. We fit an
+// exponential decay (log-linear regression) over the storm's post-peak history and
+// blend it with the simple linear rate — weighting the curve fit more as points
+// accumulate. Returns hours to reach ~99% restored (a small floor), or null.
+function etaHours(series, out, peak){
+  if(out <= 0 || !series || series.length < 2) return null;
+  const latest = series[series.length-1];
+  const rr = restorationRate(series);
+  const linEta = (rr && rr.perHour > 0) ? out / rr.perHour : null;
+
+  // post-peak decaying segment
+  let pkIdx = 0, pkVal = -1;
+  for(let i=0;i<series.length;i++){ if(series[i].out >= pkVal){ pkVal = series[i].out; pkIdx = i; } }
+  const pts = series.slice(pkIdx).filter(p => p.out > 0);
+
+  let expEta = null;
+  if(pts.length >= 4){
+    const t0 = pts[0].t;
+    let n=0,sx=0,sy=0,sxx=0,sxy=0;
+    for(const p of pts){ const x=(p.t-t0)/3600000, y=Math.log(p.out); n++; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+    const denom = n*sxx - sx*sx;
+    if(denom > 0){
+      const m = (n*sxy - sx*sy)/denom, b = (sy - m*sx)/n;   // ln(out) ≈ b + m·hours
+      if(m < 0){
+        const floor = Math.max(5, (peak||out)*0.01);
+        const e = ((Math.log(floor) - b)/m) - ((latest.t - t0)/3600000);
+        if(e > 0 && isFinite(e)) expEta = e;
+      }
+    }
+  }
+  if(expEta == null) return linEta != null ? { hours: linEta, model:false } : null;
+  if(linEta == null) return { hours: expEta, model:true };
+  const w = Math.min(1, pts.length / 8);    // 0.5 at 4 pts → 1.0 at 8+ : trust the curve more over time
+  return { hours: w*expEta + (1-w)*linEta, model: w >= 0.75 };
+}
 // Classify a location's recent trend into a clear, non-misleading label.
 // A change only counts as restoring/rising if it's meaningful vs. how many are out
 // (>= max(5/hr, 1% of current out per hour)); otherwise it's "holding steady",
 // so a plateaued tail never reads as "restoring ~1/hr → hundreds of hours".
-function rateInfo(series, out){
+function rateInfo(series, out, peak){
   if(out <= 0) return { cls:"good", txt:"✓ fully restored" };
   const r = restorationRate(series);
   if(!r) return { cls:"muted", txt:"rate: collecting…" };
@@ -738,17 +774,15 @@ function rateInfo(series, out){
   const meaningful = Math.abs(ph) >= Math.max(5, out * 0.01);
   if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
   if(ph > 0){
-    const eta = out / ph;
-    return { cls:"good", txt: eta <= 48
-      ? `▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)`
-      : `▼ restoring slowly (~${fmt(ph)} restored/hr)` };
+    const e = etaHours(series, out, peak);                 // curve-fit ETA, sharpens over time
+    if(e && e.hours <= 48) return { cls:"good", txt:`▼ ~${durStr(e.hours)} to clear (~${fmt(ph)} restored/hr)` };
+    return { cls:"good", txt:`▼ restoring slowly (~${fmt(ph)} restored/hr)` };
   }
   return { cls:"bad", txt:`▲ rising (~${fmt(-ph)} added/hr)` };
 }
 const RATE_COLOR = { good:"var(--good)", bad:"var(--bad)", muted:"var(--muted)" };
-function rateHtml(series, out){ const i = rateInfo(series, out); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>`; }
-function ratePlain(series, out){ return rateInfo(series, out).txt;
-}
+function rateHtml(series, out, peak){ const i = rateInfo(series, out, peak); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>`; }
+function ratePlain(series, out, peak){ return rateInfo(series, out, peak).txt; }
 
 /* ---------- long-run per-city reliability score ---------- */
 // Built from the persistent reliability aggregates the collector accumulates over
@@ -953,7 +987,7 @@ function renderFirstEnergy(){
         <div class="bar mini"><span style="width:${p}%"></span></div>
         <div class="row"><span>Restored (vs peak)</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
-        <div class="row"><span>Restoration rate</span><b>${rateHtml(store.countyHistory[c.name], c.out)}</b></div>
+        <div class="row"><span>Restoration rate</span><b>${rateHtml(store.countyHistory[c.name], c.out, store.peaks[c.name])}</b></div>
         <div class="row"><span>Peak / Served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
         <div class="row"><span>Est. restoration</span><b>${esc(etrStr(c.etr))}</b></div>
         ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
@@ -1002,7 +1036,7 @@ function renderCPP(){
       <div class="stat"><div class="label">Peak observed</div><div class="value">~${fmt(peak)}</div></div>
       <div class="stat"><div class="label">Restored vs peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
     </div>
-    <div class="row" style="margin-bottom:6px"><span>Restoration rate</span><b>${rateHtml(store.cppHistory, acc)}</b></div>
+    <div class="row" style="margin-bottom:6px"><span>Restoration rate</span><b>${rateHtml(store.cppHistory, acc, store.cppPeak)}</b></div>
     <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
     ${rows}
     <div class="sub-meta" style="margin-top:8px">"Approx. accounts affected" is CPP's own estimate (accounts within ~100m of an out-of-service feeder) and areas may overlap. Data as of ${asOf}.</div>`;
@@ -1024,7 +1058,7 @@ function openDetail(name){
   const active = (c.subs||[]).filter(s=>s.out>0);
   document.getElementById("d_sub").textContent =
     `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
-    `ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out)}`;
+    `ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out, store.peaks[name])}`;
   const subs = sortItems(c.subs||[], "city");
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
     const st = statusOf(s.out, s.served, s.etr);
@@ -1043,7 +1077,7 @@ function openDetail(name){
         <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""}</span>
       </div>
       <div class="sub-meta">
-        <span>${rateHtml(store.cityHistory[s.id], s.out)}</span>
+        <span>${rateHtml(store.cityHistory[s.id], s.out, store.peaks[s.id])}</span>
         <span>ETR ${esc(etrStr(s.etr))}</span>
       </div>
       <div class="sub-rel">${relLineHtml(s.id)}</div>
@@ -1132,7 +1166,7 @@ function drawMap(){
       `<div class="pp-row"><span>Currently out</span><b>${fmt(p.out)}</b></div>`+
       `<div class="pp-row"><span>Customers served</span><b>${fmt(p.served)}</b></div>`+
       `<div class="pp-row"><span>Restored vs peak</span><b>${pr}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
-      `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, p.out)}</b></div>`+
+      `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, p.out, store.peaks[p.key])}</b></div>`+
       (granularity === "township" ? `<div class="pp-row"><span>Reliability</span><b>${relLineHtml(p.key)}</b></div>` : "")+
       `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(p.etr))}</b></div>`
     );
