@@ -90,9 +90,17 @@ function loadPrev(){
   const prev = loadPrev();
 
   // FirstEnergy is required; if it fails, leave the last good state untouched.
+  // Stay quiet on one-off blips (self-heals next cycle), but fail the run — which
+  // triggers GitHub's automatic email — once data has been stale for a while.
+  const STALE_ALERT_MIN = 90;
   let fe;
   try { fe = await fetchFE(); }
-  catch(e){ console.error("FE fetch failed, keeping previous state:", e.message); process.exit(0); }
+  catch(e){
+    const lastGood = prev._feUpdatedAt || prev.collectedAt || 0;
+    const ageMin = lastGood ? Math.round((Date.now() - lastGood) / 60000) : Infinity;
+    console.error(`FE fetch failed (${e.message}); keeping previous state. Last good data ${ageMin} min ago.`);
+    process.exit(ageMin > STALE_ALERT_MIN ? 1 : 0);
+  }
 
   // CPP is optional; on failure reuse the last good CPP block.
   let cpp;
