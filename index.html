@@ -1218,6 +1218,19 @@ function closeDetail(){
   if(lastFocus && lastFocus.focus){ lastFocus.focus(); lastFocus = null; }
 }
 
+/* shared outage popup (map markers + search pin) */
+function outagePopup(name, out, served, etr, key, includeRel){
+  const pr = pctRestored(key, out), peak = store.peaks[key] || 0;
+  const series = (key in store.cityHistory) ? store.cityHistory[key] : store.countyHistory[key];
+  return `<b>${esc(name)}</b><br>`+
+    `<div class="pp-row"><span>Currently out</span><b>${fmt(out)}</b></div>`+
+    `<div class="pp-row"><span>Customers served</span><b>${fmt(served)}</b></div>`+
+    `<div class="pp-row"><span>Restored vs peak</span><b>${pctRestored(key,out)}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
+    `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>`+
+    (includeRel ? `<div class="pp-row"><span>Reliability</span><b>${relLineHtml(key)}</b></div>` : "")+
+    `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(etr))}</b></div>`;
+}
+
 /* ---------- map ---------- */
 let mapUnavailable = false;
 function initMap(){
@@ -1273,20 +1286,9 @@ function drawMap(){
   shown.sort((a,b)=>a.out-b.out).forEach(p=>{
     const r = p.out>0 ? 4 + 24*Math.sqrt(p.out)/Math.sqrt(maxOut) : 3.5;
     const col = markerColor(p.out, p.served, p.etr);
-    const pr = pctRestored(p.key, p.out);
-    const peak = store.peaks[p.key]||0;
-    const series = granularity === "county" ? store.countyHistory[p.key] : store.cityHistory[p.key];
     const m = L.circleMarker(p.loc, {
       radius:r, color:col, weight:1, fillColor:col, fillOpacity:p.out>0?0.55:0.35
-    }).bindPopup(
-      `<b>${esc(p.name)}</b><br>`+
-      `<div class="pp-row"><span>Currently out</span><b>${fmt(p.out)}</b></div>`+
-      `<div class="pp-row"><span>Customers served</span><b>${fmt(p.served)}</b></div>`+
-      `<div class="pp-row"><span>Restored vs peak</span><b>${pr}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
-      `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, p.out, store.peaks[p.key])}</b></div>`+
-      (granularity === "township" ? `<div class="pp-row"><span>Reliability</span><b>${relLineHtml(p.key)}</b></div>` : "")+
-      `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(p.etr))}</b></div>`
-    );
+    }).bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.key, granularity === "township"));
     m.addTo(markerLayer);
     bounds.push(p.loc);
   });
@@ -1455,7 +1457,7 @@ function renderMyCity(){
     ${myCity.kind==="city" ? `<div class="sub-rel" style="margin-top:9px">${relLineHtml(key)}</div>` : ""}
   </div>`;
 }
-function flyTo(loc, zoom, label, toMap){
+function flyTo(loc, zoom, label, toMap, popupHtml){
   if(!loc) return;
   if(toMap) showTab("map");
   const go = ()=>{
@@ -1465,7 +1467,7 @@ function flyTo(loc, zoom, label, toMap){
     if(searchLayer){
       searchLayer.clearLayers();
       L.circleMarker(loc, { radius:9, color:"#fff", weight:2, fillColor:"#ff7a18", fillOpacity:0.9 })
-        .bindPopup("<b>"+esc(label)+"</b>").addTo(searchLayer).openPopup();
+        .bindPopup(popupHtml || ("<b>"+esc(label)+"</b>")).addTo(searchLayer).openPopup();
     }
   };
   toMap ? setTimeout(go, 70) : go();
@@ -1494,8 +1496,9 @@ function findCity(placeName){
 // open a city's breakdown, scroll/highlight its row, pan the map, offer to pin
 function focusCity(sub, parent, msg){
   pendingPin = { kind:"city", name:sub.name, county:parent.name, id:sub.id, label:titleCase(sub.name) };
-  flyTo(sub.loc, 12, titleCase(sub.name));        // pan the map underneath (stay on the breakdown)
-  openDetail(parent.name, sub.id);                 // open + scroll to & highlight this city
+  const pop = outagePopup(titleCase(sub.name)+", "+titleCase(parent.name), sub.out, sub.served, sub.etr, sub.id, true);
+  flyTo(sub.loc, 12, titleCase(sub.name), false, pop);   // pan the map underneath (stay on the breakdown)
+  openDetail(parent.name, sub.id);                        // open + scroll to & highlight this city
   searchMsg(msg + PIN_BTN);
 }
 function searchByName(q){
@@ -1504,7 +1507,8 @@ function searchByName(q){
   const county = latest.allCounties.find(c=>c.name===norm) || latest.allCounties.find(c=>c.name.includes(norm));
   if(county){
     pendingPin = { kind:"county", name:county.name, label:titleCase(county.name)+" County" };
-    flyTo(county.loc, 10, titleCase(county.name)+" County");
+    flyTo(county.loc, 10, titleCase(county.name)+" County", false,
+          outagePopup(titleCase(county.name)+" County", county.out, county.served, county.etr, county.name, false));
     openDetail(county.name);
     searchMsg(`Showing <b>${esc(titleCase(county.name))} County</b> — ${fmt(county.out)} customers out.${PIN_BTN}`);
     return;
