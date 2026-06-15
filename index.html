@@ -654,6 +654,47 @@ function pruneCityHistory(){
   for(const k of restored){ if(over<=0) break; delete ch[k]; over--; }
 }
 
+/* ---------- restoration rate (customers restored per hour) ---------- */
+// Linear rate over the last ~90 min of a {t,out} series. Positive = recovering.
+function restorationRate(series){
+  if(!series || series.length < 2) return null;
+  const latest = series[series.length-1];
+  const cutoff = latest.t - 90*60*1000;
+  let start = latest;
+  for(let i=0;i<series.length;i++){ if(series[i].t >= cutoff){ start = series[i]; break; } }
+  const hrs = (latest.t - start.t)/3600000;
+  if(hrs < 0.2) return null;
+  return { perHour: (start.out - latest.out)/hrs, out: latest.out };
+}
+function durStr(h){
+  if(h < 1) return Math.max(1,Math.round(h*60))+" min";
+  if(h < 24) return (h<3 ? Math.round(h*10)/10 : Math.round(h))+" hr";
+  return Math.round(h/24*10)/10+" days";
+}
+// HTML badge for a city/county row
+function rateHtml(series, out){
+  if(out <= 0) return `<span style="color:var(--good)">✓ fully restored</span>`;
+  const r = restorationRate(series);
+  if(!r) return `<span style="color:var(--muted)">rate: collecting…</span>`;
+  const ph = r.perHour;
+  if(ph > 1){
+    const eta = out/ph;
+    return `<span style="color:var(--good)">▼ restoring ~${fmt(ph)}/hr</span>${eta<=72?` · ~${durStr(eta)} to clear`:""}`;
+  }
+  if(ph < -1) return `<span style="color:var(--bad)">▲ rising ~${fmt(-ph)}/hr</span>`;
+  return `<span style="color:var(--muted)">↔ no recent change</span>`;
+}
+// plain-text version for the modal subheader
+function ratePlain(series, out){
+  if(out <= 0) return "fully restored";
+  const r = restorationRate(series);
+  if(!r) return "rate: collecting…";
+  const ph = r.perHour;
+  if(ph > 1){ const eta = out/ph; return `restoring ~${fmt(ph)}/hr${eta<=72?` (~${durStr(eta)} to clear)`:""}`; }
+  if(ph < -1) return `rising ~${fmt(-ph)}/hr`;
+  return "no recent change";
+}
+
 /* ---------- which counties are in scope ---------- */
 function scopeCounties(){
   if(!latest) return [];
@@ -721,6 +762,7 @@ function renderFirstEnergy(){
         <div class="bar mini"><span style="width:${p}%"></span></div>
         <div class="row"><span>Restored (vs peak)</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
+        <div class="row"><span>Restoration rate</span><b>${rateHtml(store.countyHistory[c.name], c.out)}</b></div>
         <div class="row"><span>Peak / Served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
         <div class="row"><span>Est. restoration</span><b>${esc(etrStr(c.etr))}</b></div>
         ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
@@ -769,6 +811,7 @@ function renderCPP(){
       <div class="stat"><div class="label">Peak observed</div><div class="value">~${fmt(peak)}</div></div>
       <div class="stat"><div class="label">Restored vs peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
     </div>
+    <div class="row" style="margin-bottom:6px"><span>Restoration rate</span><b>${rateHtml(store.cppHistory, acc)}</b></div>
     <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
     ${rows}
     <div class="sub-meta" style="margin-top:8px">"Approx. accounts affected" is CPP's own estimate (accounts within ~100m of an out-of-service feeder) and areas may overlap. Data as of ${asOf}.</div>`;
@@ -789,7 +832,8 @@ function openDetail(name){
   document.getElementById("d_title").textContent = titleCase(name) + " County";
   const active = (c.subs||[]).filter(s=>s.out>0);
   document.getElementById("d_sub").textContent =
-    `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ETR ${etrStr(c.etr)}`;
+    `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
+    `ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out)}`;
   const subs = (c.subs||[]).slice().sort((a,b)=> (b.out-a.out) || a.name.localeCompare(b.name));
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
     const st = statusOf(s.out, s.served, s.etr);
@@ -805,7 +849,11 @@ function openDetail(name){
       </div>
       <div class="sub-meta">
         <span>${fmt(s.out)} out / ${fmt(s.served)} served</span>
-        <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""} · ETR ${esc(etrStr(s.etr))}</span>
+        <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""}</span>
+      </div>
+      <div class="sub-meta">
+        <span>${rateHtml(store.cityHistory[s.id], s.out)}</span>
+        <span>ETR ${esc(etrStr(s.etr))}</span>
       </div>
     </div>`;
   }).join("") : `<div class="sub-meta">No sub-area detail reported for this county.</div>`;
