@@ -9,6 +9,11 @@ on:
   schedule:
     - cron: "*/15 * * * *"   # GitHub's own cron (unreliable/delayed — kept as a backstop)
   workflow_dispatch:          # manual run
+    inputs:
+      reset:
+        description: "Archive the current storm and start a fresh trend"
+        type: boolean
+        default: false
   repository_dispatch:        # external pinger (e.g. cron-job.org) for reliable 15-min cadence
     types: [collect]
 
@@ -41,6 +46,8 @@ jobs:
           node-version: 20
 
       - name: Collect snapshot
+        env:
+          RESET: ${{ inputs.reset }}
         run: node scripts/collect.mjs
 
       - name: Publish to tracker-data

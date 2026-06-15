@@ -86,6 +86,14 @@
   .banner.show { display:flex; }
   .banner.error { background: rgba(231,76,60,.1); border-color: rgba(231,76,60,.35); color:#ffb4ab; }
 
+  .movers { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .mv-h { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; margin-bottom:8px; }
+  .mv-h.good { color:var(--good); } .mv-h.bad { color:var(--bad); }
+  .mv-row { display:flex; justify-content:space-between; font-size:13px; padding:5px 0; border-top:1px solid var(--line-soft); }
+  .mv-row:first-of-type { border-top:none; }
+  .mv-row b { font-variant-numeric:tabular-nums; }
+  .mv-empty { color:var(--muted); font-size:12px; padding:4px 0; }
+  @media (max-width:560px){ .movers { grid-template-columns:1fr; gap:14px; } }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .stat .note { font-size:11px; color:var(--muted); margin-top:5px; line-height:1.35; }
   :focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -273,6 +281,8 @@
     <div class="skeleton"></div><div class="skeleton"></div>
   </section>
 
+  <div id="movers"></div>
+
   <div class="toolbar">
     <button class="primary" id="refreshBtn">↻ Refresh now</button>
     <label class="toggle"><input type="checkbox" id="autoChk" checked /> Auto-refresh (5 min)</label>
@@ -360,11 +370,11 @@
   shared snapshot, so <em>every visitor sees the same trends</em> (you don't need to keep the page open).
   <b>FirstEnergy</b> (Ohio Storm Center) reports customers out per county and per city/township;
   <b>Cleveland Public Power</b> reports which distribution <em>feeders</em> are out plus an <em>approximate</em>
-  count of affected accounts (no per-customer counts). "% restored" is measured against the <em>peak</em>
-  observed since the current storm began, and the shared history <b>auto-resets about 24 hours after the last
-  customer is restored</b>. If the shared snapshot can't be reached, the page falls back to live data tracked
-  only in your browser. Click any FirstEnergy county card to drill into its cities/townships, search a city or
-  ZIP, or explore the map.</p>
+  count of affected accounts (no per-customer counts). "% restored" and the restoration-rate figures are measured
+  against the <em>peak</em> observed since the current storm began; the shared history is <b>reset only on demand
+  for each new storm</b> (no automatic time-based reset). If the shared snapshot can't be reached, the page falls
+  back to live data tracked only in your browser. Click any FirstEnergy county card to drill into its
+  cities/townships, search a city or ZIP, or explore the map.</p>
   <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
   map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
   FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -737,6 +747,39 @@ function sortItems(items, kind){
   return arr;
 }
 
+/* ---------- top movers (change since last update) ---------- */
+function topMovers(){
+  const moves = [];
+  scopeCounties().forEach(c=>{
+    const h = store.countyHistory[c.name];
+    if(h && h.length >= 2){
+      const delta = h[h.length-2].out - h[h.length-1].out;   // + improved, - worse
+      if(delta !== 0) moves.push({ name:c.name, delta });
+    }
+  });
+  return {
+    improved: moves.filter(m=>m.delta>0).sort((a,b)=>b.delta-a.delta).slice(0,3),
+    worsened: moves.filter(m=>m.delta<0).sort((a,b)=>a.delta-b.delta).slice(0,3)
+  };
+}
+function renderMovers(){
+  const el = document.getElementById("movers");
+  if(!el) return;
+  const { improved, worsened } = topMovers();
+  if(!improved.length && !worsened.length){ el.innerHTML = ""; return; }
+  const col = (title, cls, arr, sign) =>
+    `<div><div class="mv-h ${cls}">${title}</div>` +
+    (arr.length ? arr.map(m=>`<div class="mv-row"><span>${nameHtml(m.name)}</span><b>${sign}${fmt(Math.abs(m.delta))}</b></div>`).join("")
+                : `<div class="mv-empty">no change</div>`) + `</div>`;
+  el.innerHTML = `<div class="panel">
+    <h3>Top movers <small>change in customers out since the last update</small></h3>
+    <div class="movers">
+      ${col("▼ Most improved", "good", improved, "−")}
+      ${col("▲ Biggest new outages", "bad", worsened, "+")}
+    </div>
+  </div>`;
+}
+
 /* ---------- which counties are in scope ---------- */
 function scopeCounties(){
   if(!latest) return [];
@@ -785,6 +828,8 @@ function renderFirstEnergy(){
     <div class="stat"><div class="label">Restored So Far</div><div class="value">${fmt(Math.max(0,totPeak-totOut))}</div></div>
     <div class="stat"><div class="label">Overall Restored</div><div class="value">${overallPct}%</div><div class="bar"><span style="width:${overallPct}%"></span></div><div class="note">${sharedMode ? "vs the storm peak (shared, collected server-side)" : "vs the peak seen since you opened this page"}</div></div>
     <div class="stat"><div class="label">${showAll?"FE Ohio Counties":"NE Ohio Counties"}</div><div class="value small">${activeCount} active · ${restoredCount} clear</div></div>`;
+
+  renderMovers();
 
   // county cards
   const cards = sortItems(list, "county");

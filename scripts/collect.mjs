@@ -1,8 +1,9 @@
 // Collects FirstEnergy + Cleveland Public Power outage data and maintains a
 // single shared data/state.json that the dashboard reads, so every visitor sees
 // the same trends regardless of whether their browser was ever open.
-// Runs from a scheduled GitHub Action (~every 15 min). Auto-resets the storm
-// history after total customers-out has been 0 for RESET_AFTER_MS.
+// Triggered ~every 15 min. The storm history is reset ONLY on demand (run the
+// workflow with reset=true, which sets RESET — archives the current storm and
+// starts fresh). There is no automatic time-based reset.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
 const KB = "https://kubra.io";
@@ -14,7 +15,7 @@ const CPP_FS0 = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/servi
 
 const STATE_PATH = "data/state.json";
 const CAP_TOTAL = 1500, CAP_COUNTY = 1000, CAP_CITY = 96, MAX_CITIES = 300;
-const RESET_AFTER_MS = 24 * 60 * 60 * 1000;   // 0 customers out for 24h -> archive + reset
+const RESET = /^(1|true|yes|on)$/i.test(process.env.RESET || "");   // manual reset flag
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -81,13 +82,31 @@ async function fetchCPP(){
   return { updatedAt, accounts, feeders, features };
 }
 
+const FRESH = () => ({ peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[], stormStartedAt:null, zeroSince:null });
 function loadPrev(){
   try { return JSON.parse(readFileSync(STATE_PATH, "utf8")); }
-  catch(e){ return { peaks:{}, cppPeak:0, history:[], countyHistory:{}, cityHistory:{}, cppHistory:[], stormStartedAt:null, zeroSince:null }; }
+  catch(e){ return FRESH(); }
+}
+// On-demand reset: archive the current storm, then start from a clean slate.
+function resetState(prev){
+  const has = (prev.history||[]).length || Object.keys(prev.countyHistory||{}).length || (prev.cppHistory||[]).length;
+  if(has){
+    try {
+      mkdirSync("data/archive", { recursive: true });
+      const stamp = prev.stormStartedAt || prev.collectedAt || Date.now();
+      writeFileSync(`data/archive/storm-${new Date(stamp).toISOString().slice(0,10)}-${stamp}.json`,
+        JSON.stringify({ stormStartedAt: prev.stormStartedAt||null, archivedAt: Date.now(),
+          peaks: prev.peaks||{}, cppPeak: prev.cppPeak||0, history: prev.history||[],
+          countyHistory: prev.countyHistory||{}, cppHistory: prev.cppHistory||[] }));
+      console.log("reset: archived previous storm");
+    } catch(e){ console.error("archive failed:", e.message); }
+  }
+  return FRESH();
 }
 
 (async () => {
-  const prev = loadPrev();
+  let prev = loadPrev();
+  if(RESET){ prev = resetState(prev); console.log("manual reset requested — starting fresh"); }
 
   // FirstEnergy is required; if it fails, leave the last good state untouched.
   // Stay quiet on one-off blips (self-heals next cycle), but fail the run — which
@@ -144,28 +163,11 @@ function loadPrev(){
   }
   if(cpp && prev._cppUpdatedAt !== cpp.updatedAt) pushCapped(cppHistory, { t: cpp.updatedAt, out: cppOut }, CAP_TOTAL);
 
-  // storm lifecycle + auto-reset
+  // storm lifecycle (informational only — reset is manual via RESET)
   let stormStartedAt = prev.stormStartedAt || null;
   let zeroSince = prev.zeroSince ?? null;
   if(totalAll > 0){ if(!stormStartedAt) stormStartedAt = now; zeroSince = null; }
   else if(zeroSince == null){ zeroSince = now; }
-
-  let didReset = false;
-  const hasData = history.length || Object.keys(countyHistory).length || cppHistory.length;
-  if(zeroSince != null && (now - zeroSince) >= RESET_AFTER_MS && hasData){
-    didReset = true;
-    try {
-      mkdirSync("data/archive", { recursive: true });
-      const tag = new Date(stormStartedAt || zeroSince).toISOString().slice(0,10);
-      writeFileSync(`data/archive/storm-${tag}-${stormStartedAt||zeroSince}.json`,
-        JSON.stringify({ stormStartedAt, endedAt: zeroSince, peaks, cppPeak, history, countyHistory, cppHistory }));
-    } catch(e){ console.error("archive failed:", e.message); }
-    history.length = 0; cppHistory.length = 0;
-    for(const k of Object.keys(countyHistory)) delete countyHistory[k];
-    for(const k of Object.keys(cityHistory)) delete cityHistory[k];
-    for(const k of Object.keys(peaks)) delete peaks[k];
-    cppPeak = 0; stormStartedAt = null; zeroSince = null;
-  }
 
   const state = {
     schema: 1, collectedAt: now, stormStartedAt, zeroSince,
@@ -176,5 +178,5 @@ function loadPrev(){
   };
   mkdirSync("data", { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify(state));
-  console.log(`ok neoOut=${neoOut} cppOut=${cppOut} total=${totalAll} reset=${didReset} cities=${Object.keys(cityHistory).length}`);
+  console.log(`ok neoOut=${neoOut} cppOut=${cppOut} total=${totalAll} reset=${RESET} cities=${Object.keys(cityHistory).length}`);
 })();
