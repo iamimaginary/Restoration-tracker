@@ -850,8 +850,8 @@ function rateInfo(series, out, peak){
   const meaningful = Math.abs(ph) >= Math.max(5, out * 0.01);
   if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
   if(ph > 0){
-    const e = etaHours(series, out, peak);                 // curve-fit ETA, sharpens over time
-    if(e && e.hours <= 48) return { cls:"good", txt:`▼ ~${durStr(e.hours)} to clear (~${fmt(ph)} restored/hr)` };
+    const eta = out / ph;                                  // consistent with the shown rate (re-measured each update)
+    if(eta <= 48) return { cls:"good", txt:`▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)` };
     return { cls:"good", txt:`▼ restoring slowly (~${fmt(ph)} restored/hr)` };
   }
   return { cls:"bad", txt:`▲ rising (~${fmt(-ph)} added/hr)` };
