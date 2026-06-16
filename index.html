@@ -888,10 +888,12 @@ function relScore(r){
 // compact per-city reliability line for the drill-down
 function etrSuffix(id){
   const e = etrCity[id];
-  if(!e || !e.promises) return "";
+  if(!e) return "";
+  const live = (e._epActive && e._epChanges>0) ? ` · <b style="color:var(--warn)">↻ ETR revised ${e._epChanges}× this outage</b>` : "";
+  if(!e.promises) return live;
   const pctv = Math.round(e.met / e.promises * 100);
   const rev = e.etrChanges ? ` · ${(e.etrChanges/e.promises).toFixed(1)} ETR revisions/outage` : "";
-  return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>${rev}`;
+  return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>${rev}${live}`;
 }
 function relLineHtml(id){
   const etr = etrSuffix(id);
@@ -1062,17 +1064,26 @@ function renderUtility(){
 function renderEtr(){
   const el = document.getElementById("etr");
   if(!el) return;
-  const rows = Object.entries(etrStats).map(([name,e])=>({name,e})).filter(x => x.e.promises > 0);
+  // include counties with a completed ETR outage OR a live outage that's already been revised
+  const rows = Object.entries(etrStats).map(([name,e])=>({name,e}))
+    .filter(x => x.e.promises > 0 || (x.e._epActive && x.e._epChanges > 0));
   if(!rows.length){ el.innerHTML = ""; return; }
-  const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : 0;
-  const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
+  const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : -1;     // -1 = in progress, sorts first
   const revRate = e => e.promises ? (e.etrChanges||0)/e.promises : 0;
-  rows.sort((a,b)=> (pct(a.e) - pct(b.e)) || (revRate(b.e) - revRate(a.e)));   // worst met% first, then most-revised
-  const totChg = rows.reduce((a,x)=> a + (x.e.etrChanges||0), 0);
-  const row = x => { const rev = x.e.etrChanges ? `${(x.e.etrChanges/x.e.promises).toFixed(1)}` : null;
-    return `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0"><span class="rl-name">${nameHtml(x.name)} County`
-    + `<small>${x.e.met}/${x.e.promises} ETRs met${x.e.missed ? ` · avg ${(x.e.sumOverrunHrs/x.e.missed).toFixed(1)}h late` : ""}${rev ? ` · ${rev} revisions/outage` : ""}</small></span>`
-    + `<span class="rl-score"><b style="color:${pct(x.e)>=80?'var(--good)':pct(x.e)>=50?'var(--warn)':'var(--bad)'}">${pct(x.e)}%</b> ›</span></div>`; };
+  rows.sort((a,b)=> (pct(a.e) - pct(b.e)) || (revRate(b.e) - revRate(a.e)));
+  const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
+  const totChg = rows.reduce((a,x)=> a + (x.e.etrChanges||0) + (x.e._epActive ? (x.e._epChanges||0) : 0), 0);
+  const row = x => {
+    const e = x.e;
+    const metTxt = e.promises ? `${e.met}/${e.promises} ETRs met` : "outage in progress";
+    const lateTxt = e.missed ? ` · avg ${(e.sumOverrunHrs/e.missed).toFixed(1)}h late` : "";
+    const revTxt = e.etrChanges ? ` · ${(e.etrChanges/e.promises).toFixed(1)} revisions/outage` : "";
+    const liveTxt = (e._epActive && e._epChanges>0) ? ` · <b style="color:var(--warn)">↻ revised ${e._epChanges}× this outage</b>` : "";
+    const badge = e.promises ? `<b style="color:${pct(e)>=80?'var(--good)':pct(e)>=50?'var(--warn)':'var(--bad)'}">${pct(e)}%</b>` : `<b style="color:var(--muted)">live</b>`;
+    return `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0">`
+      + `<span class="rl-name">${nameHtml(x.name)} County<small>${metTxt}${lateTxt}${revTxt}${liveTxt}</small></span>`
+      + `<span class="rl-score">${badge} ›</span></div>`;
+  };
   el.innerHTML = `<div class="panel">
     <h3>FirstEnergy ETR accuracy &amp; stability <small>met by the promised time, and how often it was revised · ${tot.m}/${tot.p} met, ${totChg} revisions · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
