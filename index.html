@@ -1066,7 +1066,8 @@ function renderEtr(){
   if(!rows.length){ el.innerHTML = ""; return; }
   const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : 0;
   const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
-  rows.sort((a,b)=> pct(a.e) - pct(b.e));
+  const revRate = e => e.promises ? (e.etrChanges||0)/e.promises : 0;
+  rows.sort((a,b)=> (pct(a.e) - pct(b.e)) || (revRate(b.e) - revRate(a.e)));   // worst met% first, then most-revised
   const totChg = rows.reduce((a,x)=> a + (x.e.etrChanges||0), 0);
   const row = x => { const rev = x.e.etrChanges ? `${(x.e.etrChanges/x.e.promises).toFixed(1)}` : null;
     return `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0"><span class="rl-name">${nameHtml(x.name)} County`
