@@ -206,6 +206,10 @@
   .legend { display:flex; gap:8px; flex-wrap:wrap; font-size:11.5px; color:var(--muted); margin-top:12px; align-items:center; }
   .legend > span:not(:last-child) { background:var(--bg); border:1px solid var(--line-soft); padding:3px 9px; border-radius:999px; display:inline-flex; align-items:center; }
   .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .causelegend { margin-top:8px; }
+  .causelegend[hidden] { display:none; }
+  .cause-cluster { display:flex; align-items:center; justify-content:center; border-radius:50%;
+    background:rgba(20,30,42,.78); border:2px solid var(--accent-2); color:#fff; font-weight:700; font-size:11px; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:#16212e; color:#e8eef5; border:1px solid #2a3a4d; }
   .leaflet-popup-content { margin:11px 13px; font-size:13px; line-height:1.5; }
   .leaflet-popup-content b { color:#fff; }
@@ -389,12 +393,14 @@
             <button data-g="heatmap">Heatmap</button>
           </span>
           <label class="toggle"><input type="checkbox" id="restoredChk" /> include restored</label>
+          <label class="toggle"><input type="checkbox" id="causeChk" /> show causes</label>
         </span>
       </h3>
       <div class="map-wrap">
         <div id="map"></div>
         <div id="mapHint" hidden>Tap the map to pan &amp; zoom</div>
       </div>
+      <div id="causeLegend" class="legend causelegend" hidden></div>
       <div class="legend">
         <span><i style="background:#e74c3c"></i>Major (≥10% out)</span>
         <span><i style="background:#ff7a18"></i>Significant</span>
@@ -466,6 +472,11 @@
       aggregator, for a truly outside confirmation of both FirstEnergy and Cleveland Public Power; that source sits
       behind bot-protection that often blocks automated requests, so it's best-effort and simply omitted when it can't
       be fetched.</p>
+      <p><b>Outage causes:</b> On the Map tab, turn on <b>show causes</b> to load FirstEnergy's individual outage
+      incidents for whatever you're viewing — each shows its reported <em>cause</em> (weather, trees, equipment, etc.),
+      crew status, and ETR, colored by cause. Zoomed out you'll see clusters ("N outages here"); zoom in and they
+      resolve into individual outages. This is pulled live from FirstEnergy's map data only for the area on screen, so
+      it costs nothing until you ask for it.</p>
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -549,6 +560,8 @@ let relTrend = [];          // daily NE Ohio availability % (from shared state)
 let crosscheck = null;      // independent poweroutage.us figures (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
+let causeLayer = null, causeOn = false, causeTmpl = null, causeSeq = 0;
+const causeTileCache = new Map();   // quadkey -> { t, items }  (short TTL)
 let granularity = "township";
 let detailOpen = null;
 let lastFocus = null;
@@ -1488,6 +1501,8 @@ function initMap(){
   }).addTo(map);
   markerLayer = L.layerGroup().addTo(map);
   searchLayer = L.layerGroup().addTo(map);
+  causeLayer = L.layerGroup().addTo(map);
+  map.on("moveend zoomend", scheduleCauses);   // refetch incident causes for the new viewport
 
   // Cooperative gestures on touch: don't trap page scroll — require a tap to start panning.
   if(window.matchMedia && window.matchMedia("(pointer: coarse)").matches){
@@ -1596,6 +1611,137 @@ function drawMap(){
     map._fitOnce = true;   // only auto-fit on first paint; respect user panning afterward
   }
   setTimeout(()=>map.invalidateSize(), 0);
+}
+
+/* ---------- on-demand outage causes (live, client-side, like Kübra's own map) ----------
+   Kübra serves individual outage incidents (with cause, crew status, ETR) as a quadtree of
+   cluster tiles. We fetch only the tiles covering the current viewport at the current zoom:
+   zoomed out → cluster bubbles ("N outages here, zoom in"); zoomed in → individual incidents
+   colored by cause. No server cost; the user's zoom drives how much detail loads. */
+const CAUSE_MINZ = 6, CAUSE_MAXZ = 15, CAUSE_MAX_TILES = 24, CAUSE_TTL_MS = 3*60*1000;
+const CAUSE_CATS = [
+  { test:/weather|wind|storm|lightning|ice|snow|heat|rain|flood/i, label:"Weather",      color:"#ff7a18" },
+  { test:/tree|vegetation|limb|branch/i,                            label:"Trees",        color:"#2ecc71" },
+  { test:/equip|transformer|wire|pole|line|cable|fuse|breaker|conductor|substation/i, label:"Equipment", color:"#3498db" },
+  { test:/animal|wildlife|bird|squirrel/i,                          label:"Animal",       color:"#a855f7" },
+  { test:/vehicle|car|accident|dig|excavat|contact/i,               label:"Vehicle / dig-in", color:"#e056b6" },
+  { test:/plan|schedul|maintenance/i,                               label:"Planned",      color:"#7f8c9b" },
+  { test:/investigat|pending|assess|unknown|tbd|evaluat/i,          label:"Assessing",    color:"#c9a227" },
+];
+function causeCat(text){
+  const t = String(text||"");
+  for(const c of CAUSE_CATS) if(c.test.test(t)) return c;
+  return { label: t ? "Other" : "Assessing", color: t ? "#9bb0c4" : "#c9a227" };
+}
+const causeText = v => (v && typeof v === "object") ? (v["EN-US"] || v.orig || "") : (v || "");
+// google-encoded polyline → [lat,lng] (precision 5)
+function decodePoly(str){
+  let i=0, lat=0, lng=0; const f=1e5;
+  const step=()=>{ let r,s=0,res=0; do{ r=str.charCodeAt(i++)-63; res|=(r&31)<<s; s+=5; }while(r>=32); return (res&1)?~(res>>1):(res>>1); };
+  lat+=step(); lng+=step();
+  return [lat/f, lng/f];
+}
+// tile math (Bing quadkey)
+const lon2tileX = (lon,z)=> Math.floor((lon+180)/360 * 2**z);
+const lat2tileY = (lat,z)=>{ const r=lat*Math.PI/180; return Math.floor((1 - Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2 * 2**z); };
+function tileQuadkey(x,y,z){ let q=""; for(let i=z;i>0;i--){ let d=0; const m=1<<(i-1); if(x&m)d+=1; if(y&m)d+=2; q+=String(d); } return q; }
+async function ensureCauseTmpl(){
+  if(causeTmpl) return causeTmpl;
+  const cs = await fetch(`${KB}/stormcenter/api/v1/stormcenters/${INSTANCE}/views/${VIEW}/currentState?preview=false`, {cache:"no-store"})
+    .then(r=>{ if(!r.ok) throw new Error("currentState "+r.status); return r.json(); });
+  const t = cs.data && cs.data.cluster_interval_generation_data;
+  if(!t || !/\{qkh\}/.test(t)) throw new Error("no cluster data path");
+  causeTmpl = t;
+  return t;
+}
+function clusterUrl(q){
+  const qkh = q.slice(-3).split("").reverse().join("");   // CDN shard = last 3 quadkey chars reversed
+  return `${KB}/${causeTmpl.replace("{qkh}", qkh)}/public/cluster-5/${q}.json`;
+}
+async function fetchClusterTile(q){
+  const c = causeTileCache.get(q);
+  if(c && (Date.now()-c.t) < CAUSE_TTL_MS) return c.items;
+  const j = await fetch(clusterUrl(q), {cache:"no-store"}).then(r=> r.ok ? r.json() : null).catch(()=>null);
+  const items = (j && Array.isArray(j.file_data)) ? j.file_data : [];
+  causeTileCache.set(q, { t:Date.now(), items });
+  return items;
+}
+function visibleTiles(){
+  let z = Math.max(CAUSE_MINZ, Math.min(CAUSE_MAXZ, Math.round(map.getZoom())));
+  const b = map.getBounds();
+  for(;;){
+    const x0=lon2tileX(b.getWest(),z), x1=lon2tileX(b.getEast(),z);
+    const y0=lat2tileY(b.getNorth(),z), y1=lat2tileY(b.getSouth(),z);
+    if((x1-x0+1)*(y1-y0+1) <= CAUSE_MAX_TILES || z<=CAUSE_MINZ){
+      const qs=[]; for(let x=x0;x<=x1;x++) for(let y=y0;y<=y1;y++) qs.push(tileQuadkey(x,y,z));
+      return { z, qs };
+    }
+    z--;   // too many tiles when zoomed out → step to a coarser (cluster) zoom
+  }
+}
+let causeTimer = null;
+function scheduleCauses(){ if(!causeOn) return; clearTimeout(causeTimer); causeTimer = setTimeout(loadCauses, 350); }
+async function loadCauses(){
+  if(!causeOn || !map || !causeLayer) return;
+  const seq = ++causeSeq;
+  let tmpl; try { tmpl = await ensureCauseTmpl(); } catch(e){ setCauseLegend([], "Couldn't load cause data."); return; }
+  if(seq !== causeSeq) return;
+  const { z, qs } = visibleTiles();
+  let items = [];
+  try { const results = await Promise.all(qs.map(fetchClusterTile)); results.forEach(a=> items = items.concat(a)); }
+  catch(e){ return; }
+  if(seq !== causeSeq || !causeOn) return;            // a newer pan/zoom superseded this
+  causeLayer.clearLayers();
+  const catsSeen = new Map();
+  let clusters = 0, incidents = 0;
+  for(const it of items){
+    const d = it.desc || {};
+    const loc = (it.geom && it.geom.p && it.geom.p[0]) ? decodePoly(it.geom.p[0]) : null;
+    if(!loc) continue;
+    const cust = (d.cust_a && d.cust_a.val) || 0;
+    if(d.cluster){
+      clusters++;
+      const n = d.n_out || 0;
+      const sz = Math.round(20 + 14*Math.min(1, Math.sqrt(cust)/40));
+      const icon = L.divIcon({ className:"", html:`<div class="cause-cluster" style="width:${sz}px;height:${sz}px">${fmt(n)}</div>`, iconSize:[sz,sz] });
+      L.marker(loc, { icon }).bindPopup(
+        `<b>${fmt(n)} outage${n===1?"":"s"} here</b>`+
+        `<div class="pp-row"><span>Customers affected</span><b>${fmt(cust)}</b></div>`+
+        `<div class="pp-row"><span>Tip</span><b>Zoom in for causes</b></div>`
+      ).addTo(causeLayer);
+    } else {
+      incidents++;
+      const cz = causeCat(causeText(d.cause));
+      catsSeen.set(cz.label, cz.color);
+      const r = 5 + 14*Math.min(1, Math.sqrt(cust)/40);
+      L.circleMarker(loc, { radius:r, color:cz.color, weight:1.5, fillColor:cz.color, fillOpacity:0.55 }).bindPopup(
+        `<b>${esc(causeText(d.cause) || "Cause being assessed")}</b>`+
+        `<div class="pp-row"><span>Customers affected</span><b>${fmt(cust)}</b></div>`+
+        (causeText(d.crew_status) ? `<div class="pp-row"><span>Crew status</span><b>${esc(causeText(d.crew_status))}</b></div>` : "")+
+        `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(d.etr))}</b></div>`+
+        (d.start_time ? `<div class="pp-row"><span>Started</span><b>${esc(timeStr(Date.parse(d.start_time)))}</b></div>` : "")
+      ).addTo(causeLayer);
+    }
+  }
+  // legend reflects what's shown
+  const items2 = [...catsSeen.entries()].map(([label,color])=>({label,color}));
+  const note = incidents ? `${incidents} incident${incidents===1?"":"s"} shown` + (clusters?` · ${clusters} cluster${clusters===1?"":"s"} (zoom in)`:"")
+                         : (clusters ? `${clusters} cluster${clusters===1?"":"s"} — zoom in to see causes` : "No outages in view.");
+  setCauseLegend(items2, note);
+}
+function setCauseLegend(cats, note){
+  const el = document.getElementById("causeLegend");
+  if(!el) return;
+  el.hidden = !causeOn;
+  if(!causeOn){ el.innerHTML=""; return; }
+  el.innerHTML = cats.map(c=>`<span><i style="background:${c.color}"></i>${esc(c.label)}</span>`).join("")
+    + `<span style="border:none;background:none;color:var(--muted)">${esc(note||"")}</span>`;
+}
+function setCauseMode(on){
+  causeOn = on;
+  if(!map || !causeLayer){ return; }
+  if(on){ scheduleCauses(); }
+  else { causeLayer.clearLayers(); const el=document.getElementById("causeLegend"); if(el){ el.hidden=true; el.innerHTML=""; } }
 }
 
 /* ---------- reusable line chart (dependency-free canvas) ---------- */
@@ -1840,7 +1986,7 @@ function showTab(name){
     const on = b.dataset.tab === name;
     b.classList.toggle("on", on); b.setAttribute("aria-selected", on ? "true" : "false");
   });
-  if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); } }, 30);
+  if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); if(causeOn) scheduleCauses(); } }, 30);
   if(name === "trends") setTimeout(()=>{ drawChart(); drawRelTrend(); }, 0);
   if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
   // scroll to the top of the tab bar (not the page) so the new tab starts cleanly
@@ -1863,6 +2009,7 @@ document.getElementById("searchInput").addEventListener("keydown", e=>{ if(e.key
 document.getElementById("autoChk").addEventListener("change", scheduleAuto);
 document.getElementById("allChk").addEventListener("change", ()=>{ if(latest){ if(map) map._fitOnce=false; render(); } });
 document.getElementById("restoredChk").addEventListener("change", drawMap);
+document.getElementById("causeChk").addEventListener("change", e=>{ initMap(); setCauseMode(e.target.checked); });
 document.getElementById("granSeg").addEventListener("click", e=>{
   const b = e.target.closest("button[data-g]"); if(!b) return;
   granularity = b.dataset.g;

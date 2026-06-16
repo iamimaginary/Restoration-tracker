@@ -65,6 +65,16 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   independent* CPP check, different upstream than our ArcGIS feed). Best-effort: any failure leaves
   `crosscheck` absent and the page hides the badge. The browser **never fetches poweroutage** (CSP/CORS
   would block it) — only the CI scraper does; the page just reads the result from `state.json`.
+- **Outage causes (per-incident)** = Kübra cluster tiles, fetched **client-side on-demand** by the page (Map tab
+  → "show causes"). Endpoint template is `currentState.data.cluster_interval_generation_data` =
+  `cluster-data/{qkh}/<guid>/<intervalId>` → full URL `https://kubra.io/<that>/public/cluster-5/{quadkey}.json`,
+  where **`{qkh}` = the quadkey's last 3 chars reversed** (CDN shard) and `{quadkey}` is a Bing/z quadkey.
+  Tiles are gzip (CORS `*`, browser auto-decompresses). Items are quadtree-clustered: `desc.cluster=true` →
+  aggregate bubble; `cluster=false` → individual incident with `desc.cause`/`crew_status`/`cust_a`/`etr`
+  (`{EN-US,orig}` objects), position in `geom.p[0]` (Google polyline, **precision 5**). The page fetches only
+  the tiles covering the current viewport at the current zoom (no descent, no server cost). Cause is NOT in the
+  county/township rollup — only here. NOTE: aggregate "leading causes" panel was deferred (a full crawl costs
+  ~250 fetches even in blue-sky, balloons in storms) — see open items.
 - **ZIP search** = `api.zippopotam.us/us/{zip}` (client-side).
 - Map tiles CARTO dark; Leaflet 1.9.4 + Leaflet.heat 0.2.0 (unpkg, pinned + SRI).
 
@@ -149,7 +159,9 @@ refresh, auto-refresh, sort, "show all FE counties", export.
 - **Map**: Leaflet. Modes via segmented control — **City/Township** & **County** (bubbles sized by out,
   colored by status) and **Heatmap** (faint county choropleth + city-level density via Leaflet.heat,
   fallback colored dots). **Storm playback** (play/pause + time slider scrubs markers/heat through the
-  stored snapshots; "Live" resets). Search drops a pin with full stats.
+  stored snapshots; "Live" resets). Search drops a pin with full stats. **"show causes" toggle** overlays
+  FirstEnergy's individual incidents (cause/crew/ETR) for the current viewport, loaded live client-side from
+  Kübra cluster tiles (`renderCauses`/`loadCauses`, `causeLayer`); zoom drives cluster→incident resolution.
 - **Trends**: NE Ohio outage trend chart + daily **reliability trend** (availability/day).
 - **Reliability** (gated ~3 days of data, then keeps averaging): **utility comparison** (Ohio Edison vs
   Illuminating, customer-weighted availability); **City reliability** (availability grade A+–F = ASAI-style
@@ -210,8 +222,12 @@ data if the shared snapshot is >25 min stale; `prefers-reduced-motion` supported
   rule (recover well below peak, then surge back above start threshold → archive + restart). User had not
   decided. Default (merge) is intentionally chosen to avoid over-splitting one storm into phantom events.
 - **Remaining queued features (not built):**
-  1. **Outage cause** (tree/equipment/etc.) — needs Kübra's incident-level feed (different endpoint than
-     the township report). *This was next up; verify the incident feed first.*
+  1. ~~**Outage cause** (tree/equipment/etc.)~~ — **map version DONE** (this session): on-demand client-side
+     incident overlay on the Map tab (see Data sources → "Outage causes"). STILL PENDING: the **aggregate
+     "leading causes" panel** (storm-wide breakdown like "Weather 70%, Trees 12%…"). It needs a budget-capped
+     quadtree crawl in the collector (full descent ≈250 fetches blue-sky / far more in storms, on the same
+     kubra.io host as the core feed) producing `causes:{sampledAt,totalCust,knownCust,byCause}` in state.json.
+     User chose "both, map first" — aggregate panel is the agreed next step for this item.
   2. **Push notifications** ("alert when my city changes") — needs service worker + permission; iOS only
      for installed PWA, limited background; untestable from session.
   3. ~~**Cross-check source** (poweroutage.us)~~ — **DONE** (this session), **hybrid**. We *proved* poweroutage's
