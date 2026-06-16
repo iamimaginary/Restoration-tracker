@@ -85,8 +85,13 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   collector exits non-zero → GitHub emails the owner. Transient 403s are silent (retry/next cycle).
 - **Cross-check step (CI only)**: the workflow runs `npm install`, caches `~/.cache/ms-playwright`
   (key `playwright-Linux-1.61.0` — bump when the playwright version in `package.json` changes), then
-  `npx playwright install --with-deps chromium`, then the scraper with `continue-on-error: true`. Adds
-  ~20–40 s/run. If poweroutage blocks/changes, only the badge disappears; core collection is unaffected.
+  `npx playwright install --with-deps chromium`, then the scraper with `continue-on-error: true`.
+  Usually a few seconds once the Chromium cache is warm; Cloudflare's challenge is probabilistic, so the
+  scraper retries up to 6× **in the same browser context** (a `cf_clearance` cookie, once earned, carries
+  the rest) — worst case ~80 s. Wait on `domcontentloaded` + the "Customers Out" text, **never
+  `networkidle`** (poweroutage streams continuously → networkidle never fires → 60 s timeout even on a
+  page that loaded fine; that was the bug in the first CI run). If poweroutage blocks/changes, only the
+  badge disappears; core collection is unaffected.
 
 ---
 
