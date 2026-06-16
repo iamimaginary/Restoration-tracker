@@ -6,28 +6,40 @@
 // starts fresh). There is no automatic time-based reset.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
-// Independent cross-check (poweroutage.us, scraped into pou.json by a separate
-// best-effort step). Fresh within this window → use it; otherwise carry the last
-// good one forward so a single missed scrape doesn't blank the verification badge.
+// Cross-check the headline numbers two ways:
+//  • internal (always available): our county-sum vs FirstEnergy's OWN published Ohio
+//    total from the same Kübra feed — catches a dropped county / parse bug / stale feed.
+//  • independent (best-effort): poweroutage.us, scraped into pou.json by a separate step.
+//    Cloudflare reliably blocks GitHub runner IPs, so this is usually absent in CI; it
+//    populates only when the scrape can reach the site (e.g. run from a residential host).
 const POU_PATH = process.env.POU_FILE || "pou.json";
 const POU_FRESH_MS = 45 * 60 * 1000;
-function loadCrosscheck(prev, feSumAll, cppOut){
+function buildCrosscheck(prev, fe, feSumAll, feServedSum, cppOut){
+  const internal = {
+    feOfficial:       fe.official ? fe.official.out : null,     // FirstEnergy's own published OH total out
+    feServedOfficial: fe.official ? fe.official.served : null,  // their own served total
+    feSum:            feSumAll,                                 // our sum across all counties
+    feServedSum,                                                // our served sum across all counties
+    nOut:             fe.official ? fe.official.nOut : null      // their own active-incident count
+  };
+
+  // independent (poweroutage): fresh → use; else carry the last good one forward
+  let poweroutage = (prev.crosscheck && prev.crosscheck.poweroutage) || null;
   let pou = null;
   try { pou = JSON.parse(readFileSync(POU_PATH, "utf8")); } catch(e){}
   if(pou && pou.ok && pou.fetchedAt && (Date.now() - pou.fetchedAt) < POU_FRESH_MS && Array.isArray(pou.utilities)){
-    const fe  = pou.utilities.find(u => u.id === "121"  || /firstenergy/i.test(u.name));
-    const cpp = pou.utilities.find(u => u.id === "1468" || /cleveland public power/i.test(u.name));
-    return {
-      source: "poweroutage.us",
+    const feU  = pou.utilities.find(u => u.id === "121"  || /firstenergy/i.test(u.name));
+    const cppU = pou.utilities.find(u => u.id === "1468" || /cleveland public power/i.test(u.name));
+    poweroutage = {
       fetchedAt: pou.fetchedAt,
       updatedText: pou.updatedText || null,
       ohio: pou.ohio || null,
-      fe:  fe  ? { out: fe.out,  tracked: fe.tracked  } : null,   // poweroutage's FirstEnergy (all OH)
-      cpp: cpp ? { out: cpp.out, tracked: cpp.tracked } : null,   // poweroutage's Cleveland Public Power
-      ours: { fe: feSumAll, cpp: cppOut }                          // our figures at the same moment
+      fe:  feU  ? { out: feU.out,  tracked: feU.tracked  } : null,   // poweroutage's FirstEnergy (all OH)
+      cpp: cppU ? { out: cppU.out, tracked: cppU.tracked } : null,   // poweroutage's Cleveland Public Power
+      ours: { fe: feSumAll, cpp: cppOut }                            // our figures at the same moment
     };
   }
-  return prev.crosscheck || null;    // last good paired snapshot (page greys it out if old)
+  return { internal, poweroutage };
 }
 
 const KB = "https://kubra.io";
@@ -82,6 +94,7 @@ async function fetchFE(){
   const src = (reps.find(r=>/report\.json$/i.test(r.source)) || reps[0]).source;
   const report = await jget(`${KB}/${dataPath}/${src}`, KUBRA_HEADERS);
   const st = report.file_data.areas[0];
+  const tot = report.file_data.totals || {};   // FirstEnergy's OWN published headline figures
   const counties = (st.areas||[]).map(c => {
     const served = c.cust_s || 0;
     return {
@@ -97,7 +110,8 @@ async function fetchFE(){
     };
   });
   if(!counties.length) throw new Error("empty report (no counties)");   // don't publish a blank snapshot
-  return { updatedAt: cs.updatedAt || Date.now(), counties };
+  const official = { out: (tot.cust_a && tot.cust_a.val) || 0, served: tot.cust_s || 0, nOut: tot.n_out || 0 };
+  return { updatedAt: cs.updatedAt || Date.now(), counties, official };
 }
 
 async function fetchCPP(){
@@ -175,10 +189,11 @@ function loadPrev(){
                        : (prev.cpp || { updatedAt: now, accounts: 0, feeders: [], features: [] });
   const neoOut = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+c.out, 0);
   const neoServed = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+(c.served||0), 0);
-  const feSumAll = fe.counties.reduce((s,c)=>s+c.out, 0);   // all-Ohio FE total (matches poweroutage's FirstEnergy line)
+  const feSumAll = fe.counties.reduce((s,c)=>s+c.out, 0);          // all-Ohio FE total (our sum of counties)
+  const feServedSum = fe.counties.reduce((s,c)=>s+(c.served||0), 0);
   const cppOut = cppBlock.accounts || 0;
   const totalAll = neoOut + cppOut;
-  const crosscheck = loadCrosscheck(prev, feSumAll, cppOut);
+  const crosscheck = buildCrosscheck(prev, fe, feSumAll, feServedSum, cppOut);
 
   // peaks (per county + per city, plus CPP)
   const peaks = { ...(prev.peaks||{}) };

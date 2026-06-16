@@ -16,11 +16,14 @@ import { writeFileSync } from "node:fs";
 
 const OUT_FILE = process.env.POU_FILE || "pou.json";
 const URL = "https://poweroutage.us/area/state/ohio";
-const NAV_TIMEOUT = 35000;       // domcontentloaded fires fast; this is just a safety cap
-const ATTEMPT_WAIT_MS = 12000;   // per-attempt wait for the figures (a CF interstitial fails fast → retry)
-const MAX_ATTEMPTS = 6;          // CF's challenge is probabilistic + IP-reputation based; reusing one
-                                 // context across attempts lets a cf_clearance cookie persist, so once
-                                 // we get through, the rest are instant.
+const NAV_TIMEOUT = 18000;       // domcontentloaded fires fast; this is just a safety cap
+const ATTEMPT_WAIT_MS = 8000;    // per-attempt wait for the figures (a CF interstitial fails fast → retry)
+const MAX_ATTEMPTS = 2;          // FAST-FAIL: Cloudflare reliably blocks GitHub runner IPs with an
+                                 // unsolvable managed challenge, so don't burn minutes hammering it.
+                                 // A couple of quick tries is enough on a clear IP (where it succeeds
+                                 // in ~2-4s and a cf_clearance cookie carries the retry); on a blocked
+                                 // IP we bail in well under a minute and the badge falls back to the
+                                 // always-available internal check.
 const SETTLE_MS = 800;           // let the utility cards finish hydrating
 
 const num = s => { const m = String(s||"").replace(/,/g,"").match(/-?\d+(\.\d+)?/); return m ? Number(m[0]) : null; };

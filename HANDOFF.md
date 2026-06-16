@@ -86,12 +86,12 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
 - **Cross-check step (CI only)**: the workflow runs `npm install`, caches `~/.cache/ms-playwright`
   (key `playwright-Linux-1.61.0` — bump when the playwright version in `package.json` changes), then
   `npx playwright install --with-deps chromium`, then the scraper with `continue-on-error: true`.
-  Usually a few seconds once the Chromium cache is warm; Cloudflare's challenge is probabilistic, so the
-  scraper retries up to 6× **in the same browser context** (a `cf_clearance` cookie, once earned, carries
-  the rest) — worst case ~80 s. Wait on `domcontentloaded` + the "Customers Out" text, **never
+  On GitHub runner IPs Cloudflare blocks it (managed challenge), so it **fast-fails** (2 attempts in one
+  reused browser context, well under a minute) and the badge falls back to the always-on internal check.
+  On a clear IP it succeeds in ~2-4 s. Wait on `domcontentloaded` + the "Customers Out" text, **never
   `networkidle`** (poweroutage streams continuously → networkidle never fires → 60 s timeout even on a
-  page that loaded fine; that was the bug in the first CI run). If poweroutage blocks/changes, only the
-  badge disappears; core collection is unaffected.
+  page that loaded fine; that was the bug in the very first CI run). Any failure only drops the
+  poweroutage layer; core collection is unaffected.
 
 ---
 
@@ -116,9 +116,13 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   weather:{ updatedAt, counties:{COUNTY:[events]}, alerts:[{id,event,severity,counties,onset,ends}] },
   weatherLog:[{id,event,severity,counties,onset,ends,firstSeen,lastSeen}],
   relDay:{day,outHrs,custHrs}, relTrend:[{day,availPct}],   // daily NE Ohio availability
-  crosscheck:{ source:"poweroutage.us", fetchedAt, updatedText,   // independent cross-check (or null)
-               ohio:{out,tracked}, fe:{out,tracked}, cpp:{out,tracked},
-               ours:{ fe:<all-OH FE sum>, cpp:<our CPP accounts> } },   // paired snapshot for comparison
+  crosscheck:{                                              // hybrid data cross-check
+    internal:{ feOfficial, feServedOfficial,               // FirstEnergy's OWN published OH totals (Kübra)
+               feSum, feServedSum,                          // our sum across all counties (should match feOfficial)
+               nOut },                                      // FE's own active-incident count
+    poweroutage:{ fetchedAt, updatedText, ohio:{out,tracked},  // independent (or null — usually null in CI)
+                  fe:{out,tracked}, cpp:{out,tracked},
+                  ours:{ fe:<all-OH FE sum>, cpp:<our CPP accounts> } } | null },
   _feUpdatedAt, _cppUpdatedAt
 }
 ```
@@ -132,12 +136,13 @@ Fields with `_` prefix are internal accumulators. The page exports a superset vi
 slim one-line disclaimer up top, full text in About). Always-visible: live status, search (city/ZIP),
 refresh, auto-refresh, sort, "show all FE counties", export.
 
-- **Now**: hero summary stats; **independent cross-check badge** (`renderCrosscheck()` — green ✓ when our
-  FirstEnergy & CPP counts agree with poweroutage.us within tolerance [FE max(75, 4%), CPP max(40, 8%)],
-  yellow ⚠ with the delta when they diverge; hides if the source is unavailable or >6 h old); "Top movers"
-  (cities with biggest change since last update, under their county); county cards (status accent, mini
-  outage-over-time sparkline, restoration rate, drill-down); CPP panel; **📍 My City** pin (localStorage;
-  pin from search; live status + reliability).
+- **Now**: hero summary stats; **data cross-check badge** (`renderCrosscheck()`, hybrid) — *always* checks our
+  FirstEnergy county-sum vs FirstEnergy's OWN published Ohio total (green ✓ "matches FirstEnergy's official
+  total", yellow ⚠ + delta if they diverge → dropped county / parse bug); *when present* also layers in the
+  independent poweroutage.us comparison ("also confirmed independently…" or a divergence note, tolerances FE
+  max(75,4%) / CPP max(40,8%)); "Top movers" (cities with biggest change since last update, under their
+  county); county cards (status accent, mini outage-over-time sparkline, restoration rate, drill-down); CPP
+  panel; **📍 My City** pin (localStorage; pin from search; live status + reliability).
 - **Map**: Leaflet. Modes via segmented control — **City/Township** & **County** (bubbles sized by out,
   colored by status) and **Heatmap** (faint county choropleth + city-level density via Leaflet.heat,
   fallback colored dots). **Storm playback** (play/pause + time slider scrubs markers/heat through the
@@ -202,11 +207,15 @@ data if the shared snapshot is >25 min stale; `prefers-reduced-motion` supported
      the township report). *This was next up; verify the incident feed first.*
   2. **Push notifications** ("alert when my city changes") — needs service worker + permission; iOS only
      for installed PWA, limited background; untestable from session.
-  3. ~~**Cross-check source** (poweroutage.us)~~ — **DONE** (this session). poweroutage's data API/pages are
-     Cloudflare-locked to plain fetch, so we scrape the server-rendered page with a headless Chromium in CI
-     (`scripts/poweroutage.mjs`) and compare FE/CPP. Not *fully* independent for FE (poweroutage's FE line
-     comes from the same Kübra upstream → confirms our parse completeness), but CPP is a genuine independent
-     check. Future: could also surface poweroutage's per-county rows, or add AEP/Duke from the same scrape.
+  3. ~~**Cross-check source** (poweroutage.us)~~ — **DONE** (this session), **hybrid**. We *proved* poweroutage's
+     Cloudflare reliably blocks GitHub runner IPs (the headless scrape got the unsolvable "Just a moment…"
+     managed challenge 6/6 in CI; it does succeed from cleaner IPs in ~2-4 s). So the cross-check is two-layer:
+     (a) **internal, always-on** — our FE county-sum vs FirstEnergy's own published OH total (same Kübra feed)
+     catches dropped-county/parse/stale bugs; (b) **independent, best-effort** — `scripts/poweroutage.mjs`
+     (fast-fail, 2 attempts) populates `crosscheck.poweroutage` only when reachable (e.g. if run from a
+     residential host / via a proxy). To make poweroutage work from CI you'd need a residential proxy or a
+     CF-bypass scraping API (paid, ToS-gray) — the collector reads `pou.json` from `$POU_FILE`, so any external
+     process can supply it. Future: surface poweroutage's per-county rows, or add AEP/Duke from the same scrape.
   4. **Coverage expansion** — Toledo Edison (NW Ohio, already in the FE feed) / AEP / Duke. *(Note: the
      poweroutage scrape already pulls AEP/Duke/AES Ohio totals into `pou.json` — easy seed for this.)*
   5. **Token-expiry reminder** — only partly doable (page can't read PAT expiry; static note at best).

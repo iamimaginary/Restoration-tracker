@@ -458,11 +458,14 @@
       outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
       storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage. Storm aftermath
       (outages lingering after an alert expires) isn't counted as blue-sky.</p>
-      <p><b>Independent cross-check:</b> Each cycle we compare our FirstEnergy and Cleveland Public Power counts against
-      <a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener">poweroutage.us</a>, a separate
-      outage aggregator. When they agree (within a small tolerance) the Now tab shows a green <em>cross-checked</em>
-      badge; a real gap — a county dropping out of a feed, or a stalled source — surfaces as a yellow divergence notice.
-      It's best-effort, so the badge simply hides if that source can't be reached.</p>
+      <p><b>Data cross-check:</b> Each cycle we verify the headline number two ways. <em>Always:</em> our county-by-county
+      sum is checked against FirstEnergy's <em>own</em> published Ohio total from the same feed — if they ever disagree
+      (a county dropped out, a parse glitch, a stalled feed) the Now tab shows a yellow notice instead of the green
+      <em>verified</em> badge. <em>When reachable:</em> we also compare against
+      <a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener">poweroutage.us</a>, an independent
+      aggregator, for a truly outside confirmation of both FirstEnergy and Cleveland Public Power; that source sits
+      behind bot-protection that often blocks automated requests, so it's best-effort and simply omitted when it can't
+      be fetched.</p>
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -577,14 +580,6 @@ function titleCase(s){ return String(s||"").toLowerCase().replace(/\b\w/g, c=>c.
 /* feed place-name → display-ready, escaped */
 function nameHtml(s){ return esc(titleCase(s)); }
 function timeStr(ts){ return ts ? new Date(ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "—"; }
-function relTimeStr(ts){
-  if(!ts) return "—";
-  const m = Math.round((Date.now() - ts) / 60000);
-  if(m < 1) return "just now";
-  if(m < 60) return m + "m ago";
-  const h = Math.round(m / 60);
-  return h < 24 ? h + "h ago" : Math.round(h / 24) + "d ago";
-}
 function etrStr(etr){
   if(!etr || /null/i.test(etr)) return "Assessing";
   const d = new Date(etr); if(isNaN(d)) return "Assessing";
@@ -1231,55 +1226,57 @@ function renderFirstEnergy(){
   drawChart();
 }
 
-/* ---------- Independent cross-check (poweroutage.us) ---------- */
-// We compare poweroutage.us's own FirstEnergy and Cleveland Public Power counts
-// against ours. The scraper and collector run seconds apart in CI, but numbers can
-// still drift slightly during an active storm, so a small tolerance counts as a
-// match. A real divergence (a dropped county, a broken CPP feed) shows up clearly.
+/* ---------- Data cross-check ---------- */
+// Two layers:
+//  • internal (always): our county-sum vs FirstEnergy's OWN published Ohio total (same
+//    Kübra feed). Should match near-exactly; a gap means we dropped a county / mis-parsed.
+//  • independent (when present): poweroutage.us's FirstEnergy & Cleveland Public Power
+//    counts vs ours. Cloudflare blocks our collector's IP, so this is usually absent.
+const within = (a, b, floor, pct) => (a == null || b == null) ? null : Math.abs(a - b) <= Math.max(floor, b * pct);
 function renderCrosscheck(){
   const el = document.getElementById("crosscheck");
   if(!el) return;
   const cc = crosscheck;
-  if(!cc || (!cc.fe && !cc.cpp)){ el.style.display = "none"; return; }
+  const I = cc && cc.internal;
+  if(!I || I.feOfficial == null){ el.style.display = "none"; return; }
 
-  const ageMs = Date.now() - (cc.fetchedAt || 0);
-  if(ageMs > 6 * 60 * 60 * 1000){ el.style.display = "none"; return; }   // too old to be meaningful
-  const stale = ageMs > 90 * 60 * 1000;
+  let warn = false;
+  const segs = [];
 
-  // tolerance: matches if within max(floor, pct) of the independent figure
-  const within = (ours, theirs, floor, pct) => {
-    if(theirs == null || ours == null) return null;
-    return Math.abs(ours - theirs) <= Math.max(floor, theirs * pct);
-  };
-  const parts = [], flags = [];
-  const line = (label, ours, theirs, ok) => {
-    if(theirs == null) return;
-    if(ok){
-      parts.push(`<b>${esc(label)}</b> ${fmt(theirs)} ✓`);
-    } else {
-      const d = ours - theirs, sign = d > 0 ? "+" : "";
-      parts.push(`<b>${esc(label)}</b> ours ${fmt(ours)} vs ${fmt(theirs)} (${sign}${fmt(d)})`);
-      flags.push(label);
+  // 1) internal: our FirstEnergy sum vs FirstEnergy's official published total
+  const intOk = within(I.feSum, I.feOfficial, 1, 0.005);   // these should match near-exactly
+  if(intOk){
+    segs.push(`our <b>FirstEnergy</b> count (${fmt(I.feSum)}) matches FirstEnergy's official Ohio total`);
+  } else {
+    warn = true;
+    const d = I.feSum - I.feOfficial, sign = d > 0 ? "+" : "";
+    segs.push(`our <b>FirstEnergy</b> count ${fmt(I.feSum)} differs from FirstEnergy's official ${fmt(I.feOfficial)} (${sign}${fmt(d)})`);
+  }
+
+  // 2) independent: poweroutage.us (only if reasonably fresh)
+  const P = cc.poweroutage;
+  let pouSeg = "";
+  if(P && P.fetchedAt && (Date.now() - P.fetchedAt) < 6 * 60 * 60 * 1000){
+    const bad = [], good = [];
+    if(P.fe){ (within(P.ours && P.ours.fe, P.fe.out, 75, 0.04) ? good : bad).push(["FE", P.ours && P.ours.fe, P.fe.out]); }
+    if(P.cpp){ (within(P.ours && P.ours.cpp, P.cpp.out, 40, 0.08) ? good : bad).push(["CPP", P.ours && P.ours.cpp, P.cpp.out]); }
+    if(bad.length){
+      warn = true;
+      pouSeg = `independent check (poweroutage.us): ` +
+        bad.map(c => `${esc(c[0])} ours ${fmt(c[1])} vs ${fmt(c[2])}`).join(", ");
+    } else if(good.length){
+      pouSeg = `also confirmed independently by ` +
+        `<a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener noreferrer">poweroutage.us</a>` +
+        ` (${good.map(c => esc(c[0])).join(" & ")})`;
     }
-  };
-  if(cc.fe){ const ok = within(cc.ours && cc.ours.fe, cc.fe.out, 75, 0.04); line("FirstEnergy", cc.ours && cc.ours.fe, cc.fe.out, ok); }
-  if(cc.cpp){ const ok = within(cc.ours && cc.ours.cpp, cc.cpp.out, 40, 0.08); line("Cleveland Public Power", cc.ours && cc.ours.cpp, cc.cpp.out, ok); }
-  if(!parts.length){ el.style.display = "none"; return; }
+  }
 
-  const allOk = flags.length === 0;
-  el.className = "verify " + (allOk ? "ok" : "warn");
+  el.className = "verify " + (warn ? "warn" : "ok");
   el.style.display = "";
-  const mark = allOk ? "✓" : "⚠";
-  const lead = allOk
-    ? `Cross-checked against an independent source`
-    : `Our count differs from an independent source`;
-  const ageStr = cc.updatedText ? `their data ${esc(cc.updatedText)}`
-                                : `checked ${esc(relTimeStr(cc.fetchedAt))}`;
-  el.innerHTML =
-    `<span class="vmark">${mark}</span>${lead} ` +
-    `(<a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener noreferrer">poweroutage.us</a>): ` +
-    parts.join(`<span class="vsep">·</span>`) +
-    `<span class="vsep">·</span><span class="${stale ? "vstale" : ""}">${ageStr}</span>`;
+  const mark = warn ? "⚠" : "✓";
+  let html = `<span class="vmark">${mark}</span>` + segs.join(`<span class="vsep">·</span>`);
+  if(pouSeg) html += `<span class="vsep">·</span>${pouSeg}`;
+  el.innerHTML = html;
 }
 
 /* ---------- Cleveland Public Power panel ---------- */
