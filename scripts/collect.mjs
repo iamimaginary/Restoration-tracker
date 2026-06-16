@@ -6,6 +6,30 @@
 // starts fresh). There is no automatic time-based reset.
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
+// Independent cross-check (poweroutage.us, scraped into pou.json by a separate
+// best-effort step). Fresh within this window → use it; otherwise carry the last
+// good one forward so a single missed scrape doesn't blank the verification badge.
+const POU_PATH = process.env.POU_FILE || "pou.json";
+const POU_FRESH_MS = 45 * 60 * 1000;
+function loadCrosscheck(prev, feSumAll, cppOut){
+  let pou = null;
+  try { pou = JSON.parse(readFileSync(POU_PATH, "utf8")); } catch(e){}
+  if(pou && pou.ok && pou.fetchedAt && (Date.now() - pou.fetchedAt) < POU_FRESH_MS && Array.isArray(pou.utilities)){
+    const fe  = pou.utilities.find(u => u.id === "121"  || /firstenergy/i.test(u.name));
+    const cpp = pou.utilities.find(u => u.id === "1468" || /cleveland public power/i.test(u.name));
+    return {
+      source: "poweroutage.us",
+      fetchedAt: pou.fetchedAt,
+      updatedText: pou.updatedText || null,
+      ohio: pou.ohio || null,
+      fe:  fe  ? { out: fe.out,  tracked: fe.tracked  } : null,   // poweroutage's FirstEnergy (all OH)
+      cpp: cpp ? { out: cpp.out, tracked: cpp.tracked } : null,   // poweroutage's Cleveland Public Power
+      ours: { fe: feSumAll, cpp: cppOut }                          // our figures at the same moment
+    };
+  }
+  return prev.crosscheck || null;    // last good paired snapshot (page greys it out if old)
+}
+
 const KB = "https://kubra.io";
 const INSTANCE = "6c715f0e-bbec-465f-98cc-0b81623744be";
 const VIEW     = "db9c3f02-0a06-4672-a357-0f676eb75bfa";
@@ -151,8 +175,10 @@ function loadPrev(){
                        : (prev.cpp || { updatedAt: now, accounts: 0, feeders: [], features: [] });
   const neoOut = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+c.out, 0);
   const neoServed = fe.counties.filter(c=>NEO.has(c.name)).reduce((s,c)=>s+(c.served||0), 0);
+  const feSumAll = fe.counties.reduce((s,c)=>s+c.out, 0);   // all-Ohio FE total (matches poweroutage's FirstEnergy line)
   const cppOut = cppBlock.accounts || 0;
   const totalAll = neoOut + cppOut;
+  const crosscheck = loadCrosscheck(prev, feSumAll, cppOut);
 
   // peaks (per county + per city, plus CPP)
   const peaks = { ...(prev.peaks||{}) };
@@ -342,7 +368,7 @@ function loadPrev(){
     cpp: cppBlock,
     peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
-    weatherLog,
+    weatherLog, crosscheck,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt
   };
   mkdirSync("data", { recursive: true });

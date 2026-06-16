@@ -1,0 +1,14 @@
+{
+  "name": "restoration-tracker-collector",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Outage data collector + independent cross-check scraper for the FirstEnergy / CPP restoration tracker.",
+  "scripts": {
+    "collect": "node scripts/collect.mjs",
+    "crosscheck": "node scripts/poweroutage.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.61.0"
+  }
+}

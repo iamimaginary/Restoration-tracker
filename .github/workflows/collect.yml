@@ -40,9 +40,33 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install deps (Playwright for cross-check)
+        run: npm install --no-audit --no-fund
+
+      # Cache the Chromium build so we don't re-download ~170MB every run.
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.61.0
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # Best-effort independent cross-check (poweroutage.us). Must never block the
+      # core collection, so this step always succeeds — collect.mjs reads pou.json
+      # only if it is present and fresh.
+      - name: Cross-check (poweroutage.us)
+        continue-on-error: true
+        env:
+          POU_FILE: ${{ github.workspace }}/pou.json
+        run: node scripts/poweroutage.mjs
+
       - name: Collect snapshot
         env:
           RESET: ${{ inputs.reset }}
+          POU_FILE: ${{ github.workspace }}/pou.json
         run: node scripts/collect.mjs
 
       - name: Publish to tracker-data

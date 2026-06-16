@@ -16,6 +16,8 @@ server-collected history, reliability analytics, and weather context. Built to r
 | Live site | https://iamimaginary.github.io/Restoration-tracker/ (GitHub Pages) |
 | Page | `index.html` (one self-contained file: HTML + CSS + JS) |
 | Collector | `scripts/collect.mjs` (Node 20, ESM) |
+| Cross-check scraper | `scripts/poweroutage.mjs` (Playwright, best-effort) → `pou.json` |
+| Deps manifest | `package.json` (declares `playwright`); `.gitignore` (node_modules, pou.json, data/) |
 | Workflow | `.github/workflows/collect.yml` |
 | Map boundaries | `oh-counties.geojson` (slimmed Ohio county polygons, code branch) |
 
@@ -31,8 +33,10 @@ stays stable (avoids CDN cache thrash / Pages rebuilds on every snapshot).
 cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect"}──▶  GitHub Actions
         │                                                                              │
         └─ also: schedule cron (unreliable backstop) + workflow_dispatch (manual)      ▼
+                                  scripts/poweroutage.mjs (headless Chromium, best-effort) ─▶ pou.json
                                                                           scripts/collect.mjs
                                             fetches FirstEnergy (Kübra) + CPP (ArcGIS) + NWS alerts
+                                            reads pou.json → embeds independent cross-check
                                             updates peaks/histories/reliability/etr/weather/storm log
                                             commits data/state.json  ──▶  tracker-data branch
                                                                               │
@@ -52,6 +56,15 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   accounts (`COUNT_`) + polygons. CPP data is **approximate** (accounts within ~100m of a feeder).
 - **Weather** = NWS `api.weather.gov/alerts/active?area=OH`, mapped to NE Ohio counties by `areaDesc`.
   ALL alert types count as "weather" (incl. heat).
+- **Independent cross-check** = `poweroutage.us/area/state/ohio`. Cloudflare-protected + its data API
+  requires a browser-issued session, so plain fetch is **blocked** — but a real headless Chromium clears
+  the challenge and the page is **server-rendered**, so the per-utility numbers are in the DOM.
+  `scripts/poweroutage.mjs` (Playwright) scrapes the by-utility breakdown → `pou.json`
+  (`{ok,fetchedAt,updatedText,ohio,utilities:[{id,name,out,tracked}]}`). Key rows: **FirstEnergy = utility
+  `121`** (all-Ohio FE; matches our county-sum), **Cleveland Public Power = utility `1468`** (a *truly
+  independent* CPP check, different upstream than our ArcGIS feed). Best-effort: any failure leaves
+  `crosscheck` absent and the page hides the badge. The browser **never fetches poweroutage** (CSP/CORS
+  would block it) — only the CI scraper does; the page just reads the result from `state.json`.
 - **ZIP search** = `api.zippopotam.us/us/{zip}` (client-side).
 - Map tiles CARTO dark; Leaflet 1.9.4 + Leaflet.heat 0.2.0 (unpkg, pinned + SRI).
 
@@ -70,6 +83,10 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
     When it expires the pings 401 — user must mint a new token and paste it into cron-job.org.
 - **Self-monitor**: if the FirstEnergy fetch fails and the last good data is >90 min old, the
   collector exits non-zero → GitHub emails the owner. Transient 403s are silent (retry/next cycle).
+- **Cross-check step (CI only)**: the workflow runs `npm install`, caches `~/.cache/ms-playwright`
+  (key `playwright-Linux-1.61.0` — bump when the playwright version in `package.json` changes), then
+  `npx playwright install --with-deps chromium`, then the scraper with `continue-on-error: true`. Adds
+  ~20–40 s/run. If poweroutage blocks/changes, only the badge disappears; core collection is unaffected.
 
 ---
 
@@ -94,6 +111,9 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   weather:{ updatedAt, counties:{COUNTY:[events]}, alerts:[{id,event,severity,counties,onset,ends}] },
   weatherLog:[{id,event,severity,counties,onset,ends,firstSeen,lastSeen}],
   relDay:{day,outHrs,custHrs}, relTrend:[{day,availPct}],   // daily NE Ohio availability
+  crosscheck:{ source:"poweroutage.us", fetchedAt, updatedText,   // independent cross-check (or null)
+               ohio:{out,tracked}, fe:{out,tracked}, cpp:{out,tracked},
+               ours:{ fe:<all-OH FE sum>, cpp:<our CPP accounts> } },   // paired snapshot for comparison
   _feUpdatedAt, _cppUpdatedAt
 }
 ```
@@ -107,9 +127,12 @@ Fields with `_` prefix are internal accumulators. The page exports a superset vi
 slim one-line disclaimer up top, full text in About). Always-visible: live status, search (city/ZIP),
 refresh, auto-refresh, sort, "show all FE counties", export.
 
-- **Now**: hero summary stats; "Top movers" (cities with biggest change since last update, under their
-  county); county cards (status accent, mini outage-over-time sparkline, restoration rate, drill-down);
-  CPP panel; **📍 My City** pin (localStorage; pin from search; live status + reliability).
+- **Now**: hero summary stats; **independent cross-check badge** (`renderCrosscheck()` — green ✓ when our
+  FirstEnergy & CPP counts agree with poweroutage.us within tolerance [FE max(75, 4%), CPP max(40, 8%)],
+  yellow ⚠ with the delta when they diverge; hides if the source is unavailable or >6 h old); "Top movers"
+  (cities with biggest change since last update, under their county); county cards (status accent, mini
+  outage-over-time sparkline, restoration rate, drill-down); CPP panel; **📍 My City** pin (localStorage;
+  pin from search; live status + reliability).
 - **Map**: Leaflet. Modes via segmented control — **City/Township** & **County** (bubbles sized by out,
   colored by status) and **Heatmap** (faint county choropleth + city-level density via Leaflet.heat,
   fallback colored dots). **Storm playback** (play/pause + time slider scrubs markers/heat through the
@@ -174,8 +197,13 @@ data if the shared snapshot is >25 min stale; `prefers-reduced-motion` supported
      the township report). *This was next up; verify the incident feed first.*
   2. **Push notifications** ("alert when my city changes") — needs service worker + permission; iOS only
      for installed PWA, limited background; untestable from session.
-  3. **Cross-check source** (e.g., poweroutage.us) for redundancy/anomaly validation.
-  4. **Coverage expansion** — Toledo Edison (NW Ohio, already in the FE feed) / AEP / Duke.
+  3. ~~**Cross-check source** (poweroutage.us)~~ — **DONE** (this session). poweroutage's data API/pages are
+     Cloudflare-locked to plain fetch, so we scrape the server-rendered page with a headless Chromium in CI
+     (`scripts/poweroutage.mjs`) and compare FE/CPP. Not *fully* independent for FE (poweroutage's FE line
+     comes from the same Kübra upstream → confirms our parse completeness), but CPP is a genuine independent
+     check. Future: could also surface poweroutage's per-county rows, or add AEP/Duke from the same scrape.
+  4. **Coverage expansion** — Toledo Edison (NW Ohio, already in the FE feed) / AEP / Duke. *(Note: the
+     poweroutage scrape already pulls AEP/Duke/AES Ohio totals into `pou.json` — easy seed for this.)*
   5. **Token-expiry reminder** — only partly doable (page can't read PAT expiry; static note at best).
 - Honest take: My City, reliability, ETR (accuracy+churn), heatmap, playback, storm log are the
   high-value core. Remaining items are diminishing returns unless push alerts or statewide coverage matter.
@@ -187,3 +215,8 @@ data if the shared snapshot is >25 min stale; `prefers-reduced-motion` supported
 - CPP availability isn't directly comparable to FE (feeder-level approximate) — excluded from utility comparison.
 - ZIP→city pairing is best-effort (USPS place name vs feed township naming); falls back to centering the map.
 - Reliability/ETR/churn numbers start accumulating from when each was deployed; storms before then aren't in them.
+- Cross-check is **scraping** a server-rendered page (no stable contract). If poweroutage restructures the DOM
+  or changes utility IDs, `scripts/poweroutage.mjs` may yield `ok:false` — the badge just hides (core collection
+  unaffected). The selectors to maintain: `a[href*="/area/utility/<id>"]` cards whose text contains
+  "Customers Out" / "Customers Tracked". A small FE delta during an active storm is normal (scrape vs collect
+  run seconds apart) and absorbed by the match tolerance.

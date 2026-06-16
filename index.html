@@ -90,6 +90,17 @@
 
   .notice { font-size: 11.5px; color: var(--muted); margin: 2px 0 14px; line-height: 1.5; }
   .notice a { color: var(--accent-2); white-space: nowrap; text-underline-offset: 2px; }
+  .verify { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 11px;
+            padding: 9px 13px; margin: 0 0 18px; background: var(--panel-2); line-height: 1.5; }
+  .verify.ok { border-color: rgba(46,204,113,.38); }
+  .verify.warn { border-color: rgba(241,196,15,.5); }
+  .verify .vmark { font-weight: 800; margin-right: 6px; }
+  .verify.ok .vmark { color: var(--good); }
+  .verify.warn .vmark { color: var(--warn); }
+  .verify b { color: var(--text); font-weight: 700; }
+  .verify .vsep { color: var(--line); margin: 0 7px; }
+  .verify .vstale { opacity: .65; }
+  .verify a { color: var(--accent-2); text-underline-offset: 2px; }
 
   .banner { border:1px solid var(--line); border-radius:12px; padding:11px 14px; margin-bottom:18px; font-size:13px; display:none; align-items:center; gap:10px; }
   .banner.show { display:flex; }
@@ -352,6 +363,7 @@
       <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
       <div class="skeleton"></div><div class="skeleton"></div>
     </section>
+    <div id="crosscheck" class="verify" style="display:none"></div>
     <div id="movers"></div>
     <div class="grid" id="grid">
       <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
@@ -446,6 +458,11 @@
       outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
       storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage. Storm aftermath
       (outages lingering after an alert expires) isn't counted as blue-sky.</p>
+      <p><b>Independent cross-check:</b> Each cycle we compare our FirstEnergy and Cleveland Public Power counts against
+      <a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener">poweroutage.us</a>, a separate
+      outage aggregator. When they agree (within a small tolerance) the Now tab shows a green <em>cross-checked</em>
+      badge; a real gap — a county dropping out of a feed, or a stalled source — surfaces as a yellow divergence notice.
+      It's best-effort, so the badge simply hides if that source can't be reached.</p>
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -526,6 +543,7 @@ let weatherLog = [];        // rolling log of weather events seen
 let etrStats = {};          // per-county ETR-accuracy aggregates (from shared state)
 let etrCity = {};           // per-city ETR-accuracy aggregates (from shared state)
 let relTrend = [];          // daily NE Ohio availability % (from shared state)
+let crosscheck = null;      // independent poweroutage.us figures (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let granularity = "township";
@@ -559,6 +577,14 @@ function titleCase(s){ return String(s||"").toLowerCase().replace(/\b\w/g, c=>c.
 /* feed place-name → display-ready, escaped */
 function nameHtml(s){ return esc(titleCase(s)); }
 function timeStr(ts){ return ts ? new Date(ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "—"; }
+function relTimeStr(ts){
+  if(!ts) return "—";
+  const m = Math.round((Date.now() - ts) / 60000);
+  if(m < 1) return "just now";
+  if(m < 60) return m + "m ago";
+  const h = Math.round(m / 60);
+  return h < 24 ? h + "h ago" : Math.round(h / 24) + "d ago";
+}
 function etrStr(etr){
   if(!etr || /null/i.test(etr)) return "Assessing";
   const d = new Date(etr); if(isNaN(d)) return "Assessing";
@@ -683,6 +709,7 @@ function applyShared(s){
   etrStats = s.etrStats || {};
   etrCity = s.etrCity || {};
   relTrend = s.relTrend || [];
+  crosscheck = s.crosscheck || null;
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -1117,6 +1144,7 @@ function shareStorm(i){
 
 function render(){
   if(latest) renderFirstEnergy();
+  renderCrosscheck();
   if(latest) renderMyCity();
   renderWeather();
   renderCPP();
@@ -1201,6 +1229,57 @@ function renderFirstEnergy(){
     });
   });
   drawChart();
+}
+
+/* ---------- Independent cross-check (poweroutage.us) ---------- */
+// We compare poweroutage.us's own FirstEnergy and Cleveland Public Power counts
+// against ours. The scraper and collector run seconds apart in CI, but numbers can
+// still drift slightly during an active storm, so a small tolerance counts as a
+// match. A real divergence (a dropped county, a broken CPP feed) shows up clearly.
+function renderCrosscheck(){
+  const el = document.getElementById("crosscheck");
+  if(!el) return;
+  const cc = crosscheck;
+  if(!cc || (!cc.fe && !cc.cpp)){ el.style.display = "none"; return; }
+
+  const ageMs = Date.now() - (cc.fetchedAt || 0);
+  if(ageMs > 6 * 60 * 60 * 1000){ el.style.display = "none"; return; }   // too old to be meaningful
+  const stale = ageMs > 90 * 60 * 1000;
+
+  // tolerance: matches if within max(floor, pct) of the independent figure
+  const within = (ours, theirs, floor, pct) => {
+    if(theirs == null || ours == null) return null;
+    return Math.abs(ours - theirs) <= Math.max(floor, theirs * pct);
+  };
+  const parts = [], flags = [];
+  const line = (label, ours, theirs, ok) => {
+    if(theirs == null) return;
+    if(ok){
+      parts.push(`<b>${esc(label)}</b> ${fmt(theirs)} ✓`);
+    } else {
+      const d = ours - theirs, sign = d > 0 ? "+" : "";
+      parts.push(`<b>${esc(label)}</b> ours ${fmt(ours)} vs ${fmt(theirs)} (${sign}${fmt(d)})`);
+      flags.push(label);
+    }
+  };
+  if(cc.fe){ const ok = within(cc.ours && cc.ours.fe, cc.fe.out, 75, 0.04); line("FirstEnergy", cc.ours && cc.ours.fe, cc.fe.out, ok); }
+  if(cc.cpp){ const ok = within(cc.ours && cc.ours.cpp, cc.cpp.out, 40, 0.08); line("Cleveland Public Power", cc.ours && cc.ours.cpp, cc.cpp.out, ok); }
+  if(!parts.length){ el.style.display = "none"; return; }
+
+  const allOk = flags.length === 0;
+  el.className = "verify " + (allOk ? "ok" : "warn");
+  el.style.display = "";
+  const mark = allOk ? "✓" : "⚠";
+  const lead = allOk
+    ? `Cross-checked against an independent source`
+    : `Our count differs from an independent source`;
+  const ageStr = cc.updatedText ? `their data ${esc(cc.updatedText)}`
+                                : `checked ${esc(relTimeStr(cc.fetchedAt))}`;
+  el.innerHTML =
+    `<span class="vmark">${mark}</span>${lead} ` +
+    `(<a href="https://poweroutage.us/area/state/ohio" target="_blank" rel="noopener noreferrer">poweroutage.us</a>): ` +
+    parts.join(`<span class="vsep">·</span>`) +
+    `<span class="vsep">·</span><span class="${stale ? "vstale" : ""}">${ageStr}</span>`;
 }
 
 /* ---------- Cleveland Public Power panel ---------- */
@@ -1582,8 +1661,8 @@ function exportData(){
   const maxPeaks = (a,b)=>{ const o={...(a||{})}; for(const k in (b||{})) if((o[k]||0)<b[k]) o[k]=b[k]; return o; };
   const payload = {
     exportedAt: new Date().toISOString(),
-    sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)"],
-    firstEnergy: latest, cpp: latestCPP,
+    sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)", "poweroutage.us (independent cross-check)"],
+    firstEnergy: latest, cpp: latestCPP, crosscheck,
     peaks: maxPeaks(loc && loc.peaks, store.peaks),
     history: mergeSeries(loc && loc.history, store.history),
     countyHistory: mergeMap(loc && loc.countyHistory, store.countyHistory),
