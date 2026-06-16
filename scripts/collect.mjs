@@ -244,34 +244,41 @@ function loadPrev(){
   }
   if(dtCycle > 0 && neoServed > 0){ relDay.outHrs += neoOut * dtCycle; relDay.custHrs += neoServed * dtCycle; }
 
-  // ---- ETR accuracy per county (persistent): does FirstEnergy restore by its promised ETR? ----
+  // ---- ETR accuracy + churn per county (persistent) ----
+  // accuracy: restored by the promised time?  churn: how many times the ETR was revised during the outage.
   const etrStats = structuredClone(prev.etrStats || {});
   fe.counties.forEach(c => {
-    const e = etrStats[c.name] || (etrStats[c.name] = { promises:0, met:0, missed:0, sumOverrunHrs:0, _epActive:false, _epEtr:0 });
+    const e = etrStats[c.name] || (etrStats[c.name] = { promises:0, met:0, missed:0, sumOverrunHrs:0, etrChanges:0, _epActive:false, _epEtr:0, _epChanges:0 });
+    if(e.etrChanges == null){ e.etrChanges = 0; e._epChanges = 0; }   // migrate older records
     const etrMs = Date.parse(c.etr || "");        // NaN for "ETR-NULL"/missing
     if(c.out > 0){
       e._epActive = true;
-      if(!isNaN(etrMs)) e._epEtr = etrMs;         // remember the latest promised ETR this outage
+      if(!isNaN(etrMs)){
+        if(e._epEtr && etrMs !== e._epEtr) e._epChanges++;   // ETR revised mid-outage
+        e._epEtr = etrMs;
+      }
     } else if(e._epActive){                        // county just fully restored
       if(e._epEtr){
         e.promises++;
         if(now <= e._epEtr + 15*60000) e.met++;    // restored by the promised time (15-min grace)
         else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; }
+        e.etrChanges += e._epChanges;
       }
-      e._epActive = false; e._epEtr = 0;
+      e._epActive = false; e._epEtr = 0; e._epChanges = 0;
     }
   });
 
-  // same ETR-accuracy tracking, per city/township
+  // same ETR accuracy + churn, per city/township
   const etrCity = structuredClone(prev.etrCity || {});
   fe.counties.forEach(c => c.subs.forEach(s => {
-    const e = etrCity[s.id] || (etrCity[s.id] = { county:c.name, name:s.name, promises:0, met:0, missed:0, sumOverrunHrs:0, _epActive:false, _epEtr:0 });
+    const e = etrCity[s.id] || (etrCity[s.id] = { county:c.name, name:s.name, promises:0, met:0, missed:0, sumOverrunHrs:0, etrChanges:0, _epActive:false, _epEtr:0, _epChanges:0 });
     e.county = c.name; e.name = s.name;
+    if(e.etrChanges == null){ e.etrChanges = 0; e._epChanges = 0; }
     const etrMs = Date.parse(s.etr || "");
-    if(s.out > 0){ e._epActive = true; if(!isNaN(etrMs)) e._epEtr = etrMs; }
+    if(s.out > 0){ e._epActive = true; if(!isNaN(etrMs)){ if(e._epEtr && etrMs !== e._epEtr) e._epChanges++; e._epEtr = etrMs; } }
     else if(e._epActive){
-      if(e._epEtr){ e.promises++; if(now <= e._epEtr + 15*60000) e.met++; else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; } }
-      e._epActive = false; e._epEtr = 0;
+      if(e._epEtr){ e.promises++; if(now <= e._epEtr + 15*60000) e.met++; else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; } e.etrChanges += e._epChanges; }
+      e._epActive = false; e._epEtr = 0; e._epChanges = 0;
     }
   }));
 
