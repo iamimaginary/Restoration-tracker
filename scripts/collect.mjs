@@ -286,41 +286,57 @@ function loadPrev(){
   if(dtCycle > 0 && neoServed > 0){ relDay.outHrs += neoOut * dtCycle; relDay.custHrs += neoServed * dtCycle; }
 
   // ---- ETR accuracy + churn per county (persistent) ----
-  // accuracy: restored by the promised time?  churn: how many times the ETR was revised during the outage.
-  const etrStats = structuredClone(prev.etrStats || {});
-  fe.counties.forEach(c => {
-    const e = etrStats[c.name] || (etrStats[c.name] = { promises:0, met:0, missed:0, sumOverrunHrs:0, etrChanges:0, _epActive:false, _epEtr:0, _epChanges:0 });
-    if(e.etrChanges == null){ e.etrChanges = 0; e._epChanges = 0; }   // migrate older records
-    const etrMs = Date.parse(c.etr || "");        // NaN for "ETR-NULL"/missing
-    if(c.out > 0){
+  // accuracy: restored by the promised time?  churn: how often the ETR was revised mid-outage —
+  // split by DIRECTION, because moving the estimate *later* (a "push-back") is the painful,
+  // reliability-relevant event, while moving it *earlier* (a "pull-in", restored sooner than
+  // promised) is good news for customers and shouldn't count against stability.
+  const etrInit = extra => ({ promises:0, met:0, missed:0, sumOverrunHrs:0,
+    etrChanges:0, etrSlips:0, etrPullIns:0,                       // lifetime totals (slips = push-backs)
+    _epActive:false, _epEtr:0, _epChanges:0, _epSlips:0, _epPullIns:0, ...extra });   // current-outage accumulators
+  const etrMigrate = e => {                                        // backfill fields on older records
+    if(e.etrChanges == null){ e.etrChanges = 0; e._epChanges = 0; }
+    if(e.etrSlips == null){ e.etrSlips = 0; e.etrPullIns = 0; }    // direction unknown for past data → start fresh
+    if(e._epSlips == null){ e._epSlips = 0; e._epPullIns = 0; }
+  };
+  const etrObserve = (e, out, etrRaw) => {                         // one reading of an area's ETR
+    const etrMs = Date.parse(etrRaw || "");                        // NaN for "ETR-NULL"/missing
+    if(out > 0){
       e._epActive = true;
       if(!isNaN(etrMs)){
-        if(e._epEtr && etrMs !== e._epEtr) e._epChanges++;   // ETR revised mid-outage
+        if(e._epEtr && etrMs !== e._epEtr){
+          e._epChanges++;
+          if(etrMs > e._epEtr) e._epSlips++;                       // pushed later → push-back (counts against stability)
+          else e._epPullIns++;                                     // moved earlier → pull-in (good news)
+        }
         e._epEtr = etrMs;
       }
-    } else if(e._epActive){                        // county just fully restored
+    } else if(e._epActive){                                        // area just fully restored → close the outage
       if(e._epEtr){
         e.promises++;
-        if(now <= e._epEtr + 15*60000) e.met++;    // restored by the promised time (15-min grace)
+        if(now <= e._epEtr + 15*60000) e.met++;                    // restored by the promised time (15-min grace)
         else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; }
-        e.etrChanges += e._epChanges;
+        e.etrChanges  += e._epChanges;
+        e.etrSlips    += e._epSlips;
+        e.etrPullIns  += e._epPullIns;
       }
-      e._epActive = false; e._epEtr = 0; e._epChanges = 0;
+      e._epActive = false; e._epEtr = 0; e._epChanges = 0; e._epSlips = 0; e._epPullIns = 0;
     }
+  };
+
+  const etrStats = structuredClone(prev.etrStats || {});
+  fe.counties.forEach(c => {
+    const e = etrStats[c.name] || (etrStats[c.name] = etrInit());
+    etrMigrate(e);
+    etrObserve(e, c.out, c.etr);
   });
 
-  // same ETR accuracy + churn, per city/township
+  // same ETR accuracy + directional churn, per city/township
   const etrCity = structuredClone(prev.etrCity || {});
   fe.counties.forEach(c => c.subs.forEach(s => {
-    const e = etrCity[s.id] || (etrCity[s.id] = { county:c.name, name:s.name, promises:0, met:0, missed:0, sumOverrunHrs:0, etrChanges:0, _epActive:false, _epEtr:0, _epChanges:0 });
+    const e = etrCity[s.id] || (etrCity[s.id] = etrInit({ county:c.name, name:s.name }));
     e.county = c.name; e.name = s.name;
-    if(e.etrChanges == null){ e.etrChanges = 0; e._epChanges = 0; }
-    const etrMs = Date.parse(s.etr || "");
-    if(s.out > 0){ e._epActive = true; if(!isNaN(etrMs)){ if(e._epEtr && etrMs !== e._epEtr) e._epChanges++; e._epEtr = etrMs; } }
-    else if(e._epActive){
-      if(e._epEtr){ e.promises++; if(now <= e._epEtr + 15*60000) e.met++; else { e.missed++; e.sumOverrunHrs += (now - e._epEtr)/3600000; } e.etrChanges += e._epChanges; }
-      e._epActive = false; e._epEtr = 0; e._epChanges = 0;
-    }
+    etrMigrate(e);
+    etrObserve(e, s.out, s.etr);
   }));
 
   // rolling log of every weather event seen (NWS alerts), keyed by alert id

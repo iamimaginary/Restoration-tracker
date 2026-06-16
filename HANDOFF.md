@@ -111,7 +111,10 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   cppHistory:[{t,out}],
   reliability:{ areaId:{ name,county,served,obs,firstT,lastT,outHrs,custHrs,outTimeHrs,timeHrs,
                          peakFrac,events,outHrsBlue,outTimeBlueHrs,blueEvents } },
-  etrStats:{ COUNTY:{promises,met,missed,sumOverrunHrs,etrChanges,_epActive,_epEtr,_epChanges} },
+  etrStats:{ COUNTY:{ promises,met,missed,sumOverrunHrs,
+                      etrChanges,         // lifetime total revisions (undirected; legacy/migration)
+                      etrSlips,etrPullIns,// DIRECTIONAL: push-backs (ETR moved later, counts against stability) vs pull-ins (moved earlier, good)
+                      _epActive,_epEtr,_epChanges,_epSlips,_epPullIns } },   // current-outage accumulators
   etrCity:{ areaId:{county,name,...same etr fields...} },
   weather:{ updatedAt, counties:{COUNTY:[events]}, alerts:[{id,event,severity,counties,onset,ends}] },
   weatherLog:[{id,event,severity,counties,onset,ends,firstSeen,lastSeen}],
@@ -152,8 +155,12 @@ refresh, auto-refresh, sort, "show all FE counties", export.
   Illuminating, customer-weighted availability); **City reliability** (availability grade A+–F = ASAI-style
   `1 − Σ(out·dt)/Σ(served·dt)`, outage frequency, interruptions/avg duration = SAIFI/CAIDI-ish, "blue-sky"
   outages = no NWS alert + no active regional storm = possible infrastructure issues); **FirstEnergy ETR
-  accuracy & stability** (met/missed by promised time + **ETR churn** = revisions per outage, incl. live
-  "↻ revised N× this outage"; tap a county → its cities).
+  accuracy & stability** (met/missed by promised time + **directional ETR churn** — revisions are split into
+  **push-backs** [ETR moved *later*; the reliability-relevant instability metric → "N push-backs/outage",
+  live "↻ ETR pushed back N×"] vs **pull-ins** [moved *earlier* = restored sooner than promised → shown as a
+  positive "▲ beat estimate N×" / "▲ moved up N×"]; sorted & headlined by push-backs; tap a county → its
+  cities). Page helpers `etrSlips()`/`etrLiveSlips()` fall back to the undirected `etrChanges` for records
+  predating direction tracking.
 - **Storms**: auto storm log (archived events) + per-storm **Share** (copies summary + `#storms` link).
 - **About**: how-it-works, weather/blue-sky, privacy, open-data link (`tracker-data/state.json`),
   report numbers, trademark/attribution.

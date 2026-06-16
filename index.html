@@ -907,14 +907,29 @@ function relScore(r){
     blueShare: r.outHrs > 0 ? ((r.outHrsBlue || 0) / r.outHrs) * 100 : 0
   };
 }
+// ETR revisions, split by direction: push-backs (estimate moved later) count against
+// stability; pull-ins (moved earlier → restored sooner than promised) are good news.
+// Older records (before direction was tracked) fall back to the undirected total.
+function etrSlips(e){ return (e.etrSlips != null) ? e.etrSlips : (e.etrChanges || 0); }
+function etrLiveSlips(e){ return (e._epSlips != null) ? e._epSlips : (e._epChanges || 0); }
+// live, in-progress churn for the current outage → "↻ pushed back N× · ▲ moved up M×"
+function etrLiveTxt(e){
+  if(!e._epActive) return "";
+  const parts = [];
+  const s = etrLiveSlips(e), p = e._epPullIns || 0;
+  if(s > 0) parts.push(`<b style="color:var(--warn)">↻ ETR pushed back ${s}×</b>`);
+  if(p > 0) parts.push(`<b style="color:var(--good)">▲ moved up ${p}×</b>`);
+  return parts.length ? ` · ${parts.join(" · ")} this outage` : "";
+}
 // compact per-city reliability line for the drill-down
 function etrSuffix(id){
   const e = etrCity[id];
   if(!e) return "";
-  const live = (e._epActive && e._epChanges>0) ? ` · <b style="color:var(--warn)">↻ ETR revised ${e._epChanges}× this outage</b>` : "";
+  const live = etrLiveTxt(e);
   if(!e.promises) return live;
   const pctv = Math.round(e.met / e.promises * 100);
-  const rev = e.etrChanges ? ` · ${(e.etrChanges/e.promises).toFixed(1)} ETR revisions/outage` : "";
+  const slips = etrSlips(e);
+  const rev = slips ? ` · ${(slips/e.promises).toFixed(1)} push-backs/outage` : "";
   return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>${rev}${live}`;
 }
 function relLineHtml(id){
@@ -1086,28 +1101,30 @@ function renderUtility(){
 function renderEtr(){
   const el = document.getElementById("etr");
   if(!el) return;
-  // include counties with a completed ETR outage OR a live outage that's already been revised
+  // include counties with a completed ETR outage OR a live outage that's already slipped/pulled-in
   const rows = Object.entries(etrStats).map(([name,e])=>({name,e}))
-    .filter(x => x.e.promises > 0 || (x.e._epActive && x.e._epChanges > 0));
+    .filter(x => x.e.promises > 0 || (x.e._epActive && (etrLiveSlips(x.e) > 0 || (x.e._epPullIns||0) > 0)));
   if(!rows.length){ el.innerHTML = ""; return; }
   const pct = e => e.promises ? Math.round(e.met / e.promises * 100) : -1;     // -1 = in progress, sorts first
-  const revRate = e => e.promises ? (e.etrChanges||0)/e.promises : 0;
-  rows.sort((a,b)=> (pct(a.e) - pct(b.e)) || (revRate(b.e) - revRate(a.e)));
+  const slipRate = e => e.promises ? etrSlips(e)/e.promises : 0;
+  rows.sort((a,b)=> (pct(a.e) - pct(b.e)) || (slipRate(b.e) - slipRate(a.e)));
   const tot = rows.reduce((a,x)=>{ a.p += x.e.promises; a.m += x.e.met; return a; }, { p:0, m:0 });
-  const totChg = rows.reduce((a,x)=> a + (x.e.etrChanges||0) + (x.e._epActive ? (x.e._epChanges||0) : 0), 0);
+  const totSlips = rows.reduce((a,x)=> a + etrSlips(x.e) + (x.e._epActive ? etrLiveSlips(x.e) : 0), 0);
   const row = x => {
     const e = x.e;
     const metTxt = e.promises ? `${e.met}/${e.promises} ETRs met` : "outage in progress";
     const lateTxt = e.missed ? ` · avg ${(e.sumOverrunHrs/e.missed).toFixed(1)}h late` : "";
-    const revTxt = e.etrChanges ? ` · ${(e.etrChanges/e.promises).toFixed(1)} revisions/outage` : "";
-    const liveTxt = (e._epActive && e._epChanges>0) ? ` · <b style="color:var(--warn)">↻ revised ${e._epChanges}× this outage</b>` : "";
+    const slips = etrSlips(e);
+    const slipTxt = slips ? ` · ${(slips/e.promises).toFixed(1)} push-backs/outage` : "";
+    const pullTxt = e.etrPullIns ? ` · <span style="color:var(--good)">▲ beat estimate ${e.etrPullIns}×</span>` : "";
+    const liveTxt = etrLiveTxt(e);
     const badge = e.promises ? `<b style="color:${pct(e)>=80?'var(--good)':pct(e)>=50?'var(--warn)':'var(--bad)'}">${pct(e)}%</b>` : `<b style="color:var(--muted)">live</b>`;
     return `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0">`
-      + `<span class="rl-name">${nameHtml(x.name)} County<small>${metTxt}${lateTxt}${revTxt}${liveTxt}</small></span>`
+      + `<span class="rl-name">${nameHtml(x.name)} County<small>${metTxt}${lateTxt}${slipTxt}${pullTxt}${liveTxt}</small></span>`
       + `<span class="rl-score">${badge} ›</span></div>`;
   };
   el.innerHTML = `<div class="panel">
-    <h3>FirstEnergy ETR accuracy &amp; stability <small>met by the promised time, and how often it was revised · ${tot.m}/${tot.p} met, ${totChg} revisions · tap a county for its cities</small></h3>
+    <h3>FirstEnergy ETR accuracy &amp; stability <small>met by the promised time, and how often the estimate was pushed back · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
 }
 
@@ -1243,14 +1260,16 @@ function renderCrosscheck(){
   let warn = false;
   const segs = [];
 
-  // 1) internal: our FirstEnergy sum vs FirstEnergy's official published total
+  // 1) internal: our FirstEnergy sum vs FirstEnergy's official published total.
+  // Green = a clean trust statement (no raw number — it's the statewide FE figure and would
+  // clash with the NE-Ohio headline above). Numbers are shown only when they diverge.
   const intOk = within(I.feSum, I.feOfficial, 1, 0.005);   // these should match near-exactly
   if(intOk){
-    segs.push(`our <b>FirstEnergy</b> count (${fmt(I.feSum)}) matches FirstEnergy's official Ohio total`);
+    segs.push(`<b>Data verified</b> — matches FirstEnergy's official outage count`);
   } else {
     warn = true;
     const d = I.feSum - I.feOfficial, sign = d > 0 ? "+" : "";
-    segs.push(`our <b>FirstEnergy</b> count ${fmt(I.feSum)} differs from FirstEnergy's official ${fmt(I.feOfficial)} (${sign}${fmt(d)})`);
+    segs.push(`<b>Data mismatch</b> — our statewide FirstEnergy total (${fmt(I.feSum)}) differs from FirstEnergy's official ${fmt(I.feOfficial)} (${sign}${fmt(d)}); possible missing data`);
   }
 
   // 2) independent: poweroutage.us (only if reasonably fresh)
