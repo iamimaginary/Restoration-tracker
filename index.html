@@ -210,6 +210,9 @@
   .causelegend[hidden] { display:none; }
   .cause-cluster { display:flex; align-items:center; justify-content:center; border-radius:50%;
     background:rgba(20,30,42,.78); border:2px solid var(--accent-2); color:#fff; font-weight:700; font-size:11px; }
+  .cbar { display:flex; height:20px; border-radius:7px; overflow:hidden; border:1px solid var(--line); background:var(--bg); }
+  .cbar > span { display:block; height:100%; min-width:2px; }
+  .causes-legend { margin-top:11px; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:#16212e; color:#e8eef5; border:1px solid #2a3a4d; }
   .leaflet-popup-content { margin:11px 13px; font-size:13px; line-height:1.5; }
   .leaflet-popup-content b { color:#fff; }
@@ -368,6 +371,7 @@
       <div class="skeleton"></div><div class="skeleton"></div>
     </section>
     <div id="crosscheck" class="verify" style="display:none"></div>
+    <div id="causesPanel"></div>
     <div id="movers"></div>
     <div class="grid" id="grid">
       <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
@@ -476,7 +480,8 @@
       incidents for whatever you're viewing — each shows its reported <em>cause</em> (weather, trees, equipment, etc.),
       crew status, and ETR, colored by cause. Zoomed out you'll see clusters ("N outages here"); zoom in and they
       resolve into individual outages. This is pulled live from FirstEnergy's map data only for the area on screen, so
-      it costs nothing until you ask for it.</p>
+      it costs nothing until you ask for it. The Now tab also shows a <b>"Why the power's out"</b> summary — the
+      leading causes across FirstEnergy Ohio (a sampled breakdown; the % of customers it covers is noted).</p>
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -558,6 +563,7 @@ let etrStats = {};          // per-county ETR-accuracy aggregates (from shared s
 let etrCity = {};           // per-city ETR-accuracy aggregates (from shared state)
 let relTrend = [];          // daily NE Ohio availability % (from shared state)
 let crosscheck = null;      // independent poweroutage.us figures (from shared state)
+let causes = null;          // leading outage-cause breakdown (from shared state)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let causeLayer = null, causeOn = false, causeTmpl = null, causeSeq = 0;
@@ -718,6 +724,7 @@ function applyShared(s){
   etrCity = s.etrCity || {};
   relTrend = s.relTrend || [];
   crosscheck = s.crosscheck || null;
+  causes = s.causes || null;
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -1170,6 +1177,7 @@ function shareStorm(i){
 function render(){
   if(latest) renderFirstEnergy();
   renderCrosscheck();
+  renderCausesPanel();
   if(latest) renderMyCity();
   renderWeather();
   renderCPP();
@@ -1742,6 +1750,31 @@ function setCauseMode(on){
   if(!map || !causeLayer){ return; }
   if(on){ scheduleCauses(); }
   else { causeLayer.clearLayers(); const el=document.getElementById("causeLegend"); if(el){ el.hidden=true; el.innerHTML=""; } }
+}
+
+// ---- aggregate "leading causes" panel (Now tab), from the collector's budgeted crawl ----
+function renderCausesPanel(){
+  const el = document.getElementById("causesPanel");
+  if(!el) return;
+  const c = causes;
+  if(!c || !c.byCause || !c.knownCust){ el.innerHTML = ""; return; }
+  const agg = {};   // category label -> { cust, color }
+  for(const [raw, v] of Object.entries(c.byCause)){
+    const cat = causeCat(raw);
+    const a = (agg[cat.label] = agg[cat.label] || { cust:0, color:cat.color });
+    a.cust += (v && v.cust) || 0;
+  }
+  const rows = Object.entries(agg).map(([label,a])=>({ label, cust:a.cust, color:a.color }))
+    .filter(r => r.cust > 0).sort((x,y)=> y.cust - x.cust);
+  if(!rows.length){ el.innerHTML = ""; return; }
+  const tot = rows.reduce((s,r)=> s + r.cust, 0) || 1;
+  const coverage = c.totalCust > 0 ? Math.round(c.knownCust / c.totalCust * 100) : null;
+  const bar = rows.map(r => `<span style="width:${(r.cust/tot*100).toFixed(1)}%;background:${r.color}" title="${esc(r.label)} — ${fmt(r.cust)} customers"></span>`).join("");
+  const legend = rows.map(r => `<span><i style="background:${r.color}"></i>${esc(r.label)} <b>${Math.round(r.cust/tot*100)}%</b></span>`).join("");
+  el.innerHTML = `<div class="panel">
+    <h3>Why the power's out <small>leading causes across FirstEnergy Ohio${coverage!=null?` · based on ~${coverage}% of customers out`:""}</small></h3>
+    <div class="cbar">${bar}</div>
+    <div class="legend causes-legend">${legend}</div></div>`;
 }
 
 /* ---------- reusable line chart (dependency-free canvas) ---------- */

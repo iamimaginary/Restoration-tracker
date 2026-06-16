@@ -136,6 +136,8 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
     poweroutage:{ fetchedAt, updatedText, ohio:{out,tracked},  // independent (or null — usually null in CI)
                   fe:{out,tracked}, cpp:{out,tracked},
                   ours:{ fe:<all-OH FE sum>, cpp:<our CPP accounts> } } | null },
+  causes:{ sampledAt, totalCust, knownCust, incidents, fetches,   // budgeted Kübra cause crawl (or null)
+           byCause:{ "<raw cause text>":{cust,n} } },             // page categorizes raw→Weather/Trees/Equipment/…
   _feUpdatedAt, _cppUpdatedAt
 }
 ```
@@ -222,12 +224,13 @@ data if the shared snapshot is >25 min stale; `prefers-reduced-motion` supported
   rule (recover well below peak, then surge back above start threshold → archive + restart). User had not
   decided. Default (merge) is intentionally chosen to avoid over-splitting one storm into phantom events.
 - **Remaining queued features (not built):**
-  1. ~~**Outage cause** (tree/equipment/etc.)~~ — **map version DONE** (this session): on-demand client-side
-     incident overlay on the Map tab (see Data sources → "Outage causes"). STILL PENDING: the **aggregate
-     "leading causes" panel** (storm-wide breakdown like "Weather 70%, Trees 12%…"). It needs a budget-capped
-     quadtree crawl in the collector (full descent ≈250 fetches blue-sky / far more in storms, on the same
-     kubra.io host as the core feed) producing `causes:{sampledAt,totalCust,knownCust,byCause}` in state.json.
-     User chose "both, map first" — aggregate panel is the agreed next step for this item.
+  1. ~~**Outage cause** (tree/equipment/etc.)~~ — **DONE** (this session), both layers: (a) on-demand client-side
+     incident overlay on the Map tab (Data sources → "Outage causes"); (b) aggregate **"Why the power's out"
+     panel** on the Now tab (`renderCausesPanel()`), fed by a budget-capped quadtree crawl in collect.mjs
+     (`fetchCauses()`: seed z6 Ohio tiles, descend biggest-customers-first, BUDGET=220 fetches, stop at 90%
+     customer coverage). Cheap in practice — blue-sky hit 95% coverage in ~28 fetches. Emits
+     `causes` in state.json; page categorizes raw causes via the shared `causeCat()`. Tune BUDGET/COVER/CONC
+     in collect.mjs if storm load is a concern.
   2. **Push notifications** ("alert when my city changes") — needs service worker + permission; iOS only
      for installed PWA, limited background; untestable from session.
   3. ~~**Cross-check source** (poweroutage.us)~~ — **DONE** (this session), **hybrid**. We *proved* poweroutage's
