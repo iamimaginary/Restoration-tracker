@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.basemaps.cartocdn.com; connect-src https://kubra.io https://www.arcgis.com https://services3.arcgis.com https://api.zippopotam.us https://raw.githubusercontent.com; base-uri 'none'; form-action 'none'" />
-<meta name="description" content="Unofficial live dashboard tracking power-restoration progress across Northeast Ohio, using FirstEnergy's and Cleveland Public Power's public outage feeds. Not affiliated with either utility." />
+<meta name="description" content="Unofficial near-live dashboard tracking power-restoration progress across Northeast Ohio, using public FirstEnergy and Cleveland Public Power outage snapshots (collected ~every 15 min). Not affiliated with either utility." />
 <meta name="robots" content="noindex" />
 <meta name="theme-color" content="#0f1722" />
 <meta name="color-scheme" content="dark" />
@@ -181,6 +181,24 @@
   .searchmsg:empty { margin:0; }
   .searchmsg b { color: var(--text); }
 
+  /* data health / source-freshness bar */
+  .datahealth { font-size:11.5px; color:var(--muted); line-height:1.6; margin:0 0 14px;
+    border:1px solid var(--line); border-radius:10px; padding:8px 12px; background:rgba(255,255,255,.015); }
+  .datahealth:empty { display:none; }
+  .datahealth .dh-state { font-weight:700; }
+  .datahealth .dh-fresh { color:var(--good); }
+  .datahealth .dh-stale { color:var(--warn); }
+  .datahealth .dh-vstale { color:var(--bad); }
+  .datahealth .dh-items { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:3px; }
+  .datahealth .dh-items b { color:var(--text); font-weight:600; }
+  /* confidence tags */
+  .conf { display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
+    padding:1px 6px; border-radius:6px; border:1px solid; vertical-align:middle; white-space:nowrap; }
+  .conf-high { color:var(--good); border-color:rgba(46,204,113,.4); background:rgba(46,204,113,.1); }
+  .conf-med  { color:var(--warn); border-color:rgba(241,196,15,.4); background:rgba(241,196,15,.1); }
+  .conf-low  { color:#e88; border-color:rgba(231,76,60,.35); background:rgba(231,76,60,.08); }
+  .conf-exp  { color:#b794f6; border-color:rgba(168,85,247,.4); background:rgba(168,85,247,.1); }
+
   .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 17px 18px; margin: 18px 0; box-shadow: var(--sh-1); }
   .panel h3 { margin: 0 0 13px; font-size: 14.5px; font-weight: 700; letter-spacing: -.2px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }
   .panel h3 small { color:var(--muted); font-weight:400; font-size:12px; letter-spacing:0; }
@@ -289,6 +307,8 @@
   .rl-blue { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
   .mycity-card { border-color: rgba(255,122,24,.45); box-shadow: 0 0 0 1px rgba(255,122,24,.15), var(--sh-2); cursor:pointer; }
   .mycity-card:hover { border-color: var(--accent); }
+  .mycity-prompt { border-style:dashed; color:var(--muted); font-size:12.5px; line-height:1.5; }
+  .mycity-prompt b { color:var(--text); }
   .pin-mini { padding:5px 10px; font-size:12px; margin-left:6px; }
   .dlabel { font-size:11px; text-transform:uppercase; letter-spacing:.5px; font-weight:700; color:var(--muted); margin:2px 0 7px; }
   .dlabel span { text-transform:none; letter-spacing:0; font-weight:400; }
@@ -323,12 +343,12 @@
   <div class="logo" aria-hidden="true">⚡</div>
   <div>
     <h1>Northeast Ohio Power Restoration Tracker</h1>
-    <div class="sub">Unofficial · live FirstEnergy &amp; Cleveland Public Power outage data</div>
+    <div class="sub">Unofficial · near-live FirstEnergy &amp; Cleveland Public Power outage snapshots</div>
   </div>
   <div class="spacer"></div>
   <div class="updated" role="status" aria-live="polite">
     <span id="liveState"><span class="dot stale"></span>Connecting…</span><br />
-    Data as of <b id="lastUpdated">—</b><br />
+    Data collected <b id="lastUpdated">—</b><br />
     <span id="srcMode" class="srcmode"></span>
   </div>
 </header>
@@ -355,7 +375,7 @@
         <option value="out_asc">Fewest out</option>
         <option value="rate_desc">Fastest restoring</option>
         <option value="rate_asc">Slowest / rising</option>
-        <option value="pct_desc">% restored</option>
+        <option value="pct_desc">Recovered from peak</option>
         <option value="name">Name A–Z</option>
       </select>
     </label>
@@ -363,12 +383,14 @@
   </div>
   <div id="searchMsg" class="searchmsg"></div>
 
+  <div id="dataHealth" class="datahealth" role="status" aria-live="polite"></div>
+
   <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
     <button data-tab="now" class="on" role="tab" aria-selected="true">Now</button>
     <button data-tab="map" role="tab" aria-selected="false">Map</button>
     <button data-tab="trends" role="tab" aria-selected="false">Trends</button>
     <button data-tab="reliability" role="tab" aria-selected="false">Reliability</button>
-    <button data-tab="storms" role="tab" aria-selected="false">Storms</button>
+    <button data-tab="storms" role="tab" aria-selected="false">Events</button>
     <button data-tab="about" role="tab" aria-selected="false">About</button>
   </nav>
 
@@ -382,6 +404,7 @@
     <div id="crosscheck" class="verify" style="display:none"></div>
     <div id="causesPanel"></div>
     <div id="movers"></div>
+    <div class="dlabel" id="feSrcNote"></div>
     <div class="grid" id="grid">
       <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
     </div>
@@ -418,16 +441,16 @@
       <div class="legend">
         <span><i style="background:#e74c3c"></i>Major (≥10% out)</span>
         <span><i style="background:#ff7a18"></i>Significant</span>
-        <span><i style="background:#3498db"></i>In progress (ETR)</span>
+        <span><i style="background:#3498db"></i>Restoring (utility ETR)</span>
         <span><i style="background:#2ecc71"></i>Restored</span>
         <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
         <span>· bubble size = customers affected</span>
       </div>
       <div class="playback" id="playback" hidden>
         <button id="playBtn" type="button" title="Play / pause">▶</button>
-        <input type="range" id="playSlider" min="0" max="0" value="0" step="1" aria-label="Storm playback time" />
-        <span id="playLabel">live</span>
-        <button id="playLive" class="btn pin-mini" type="button">Live</button>
+        <input type="range" id="playSlider" min="0" max="0" value="0" step="1" aria-label="Outage event playback time" />
+        <span id="playLabel">now</span>
+        <button id="playLive" class="btn pin-mini" type="button">Now</button>
       </div>
     </div>
   </section>
@@ -435,11 +458,11 @@
   <!-- TRENDS -->
   <section class="tab" id="tab-trends" role="tabpanel">
     <div class="panel">
-      <h3>NE Ohio Customers Without Power — Restoration Trend <small id="trendNote">building from live snapshots…</small></h3>
+      <h3>NE Ohio FirstEnergy customers out — restoration trend <small id="trendNote">building from collected snapshots…</small></h3>
       <canvas id="trendChart"></canvas>
     </div>
     <div class="panel">
-      <h3>Reliability trend <small id="relTrendNote">daily NE Ohio availability — builds over days</small></h3>
+      <h3>Reliability trend <small id="relTrendNote">daily NE Ohio availability — builds over days · experimental, derived from snapshots</small></h3>
       <canvas id="relTrendChart" style="height:200px"></canvas>
     </div>
   </section>
@@ -455,20 +478,38 @@
   <!-- STORMS -->
   <section class="tab" id="tab-storms" role="tabpanel">
     <div id="stormlog"></div>
-    <div id="stormsEmpty" class="empty" style="display:none">No completed storms logged yet. When the current event is restored it'll be archived here, and the next storm starts automatically.</div>
+    <div id="stormsEmpty" class="empty" style="display:none">No completed outage events logged yet. When the current event is restored it'll be archived here, and the next one starts automatically.</div>
   </section>
 
   <!-- ABOUT -->
   <section class="tab" id="tab-about" role="tabpanel">
     <div class="panel about">
       <p><b>How it works:</b> A scheduled job collects two public feeds about every 15 minutes and publishes one
-      shared snapshot, so <em>every visitor sees the same trends</em> (you don't need to keep the page open).
-      <b>FirstEnergy</b> (Ohio Storm Center) reports customers out per county and per city/township;
-      <b>Cleveland Public Power</b> reports which distribution <em>feeders</em> are out plus an <em>approximate</em>
-      count of affected accounts (no per-customer counts). "% restored" and the restoration-rate figures are measured
-      against the <em>peak</em> observed since the current storm began; the shared history <b>auto-advances</b> —
-      when a storm is restored it's archived to the Storms log and the next one starts on its own.
-      If the shared snapshot can't be reached, the page falls back to live data tracked only in your browser.</p>
+      shared snapshot, so <em>every visitor sees the same data</em> (you don't need to keep the page open). The numbers
+      are <b>near-live</b>, not truly live: your browser <em>checks</em> for a new snapshot every 5 minutes, but the
+      underlying data is only <em>collected</em> ~every 15 minutes, so what you see is the most recent snapshot — its
+      age is shown in the <b>Data health</b> bar near the top (Fresh under 20 min · Stale 20–45 · Very stale 45+).
+      If the shared snapshot can't be reached, the page falls back to fetching the utility feeds directly in your
+      browser (labeled "Live feed").</p>
+      <p><b>FirstEnergy vs. Cleveland Public Power:</b> these are <em>different measurements</em> and aren't added
+      together. <b>FirstEnergy</b> (Ohio Storm Center) reports <em>customers out</em> per county and city/township —
+      the headline count, high confidence. <b>Cleveland Public Power</b> is a separate municipal utility that reports
+      which distribution <em>feeders</em> are out plus an <em>approximate</em> count of affected accounts (areas can
+      overlap; no per-customer counts), so it's labeled as an estimate and shown in its own card.</p>
+      <p><b>Recovered from peak:</b> this is recovery from the event's observed peak, <em>not</em> the share of all
+      customers who have power. The formula is <code>recovered = (peak − current) / peak</code> (clamped 0–100%, and
+      0 when no peak has been observed). The <b>event peak</b> is the single highest simultaneous total in the
+      collected history, shown with its time; per-area cards use that area's own peak.</p>
+      <p><b>Utility ETR vs. app estimates:</b> "Utility ETR" is the restoration time published by the utility (or
+      "none given" when they haven't issued one). The "restoration rate" / time-to-clear figures are the app's own
+      <em>experimental</em> estimates derived from the observed decline — they are not utility commitments and are
+      labeled separately.</p>
+      <p><b>Confidence labels:</b> <span class="conf conf-high">High confidence</span> = raw utility outage counts;
+      <span class="conf conf-med">Medium</span> = approximations like CPP affected-accounts;
+      <span class="conf conf-exp">Experimental</span> = derived analytics (reliability scores, ETR-accuracy,
+      cause classification, app restoration estimates). Derived features are kept because they're useful, but labeled
+      so they don't read as authoritative as the raw counts. The shared history <b>auto-advances</b> — when an event is
+      restored it's archived to the Events tab and the next one starts on its own.</p>
       <p><b>Reliability score:</b> Once a city has ~3 days of observations, it gets a long-run reliability rating that
       keeps averaging in as data accumulates. The headline is <em>availability</em> — the share of customer-time with
       power (an ASAI-style measure) — graded A+ to F, alongside how often it has any outage and its worst severity
@@ -476,8 +517,9 @@
       stabilizes over weeks.</p>
       <p><b>Weather events:</b> The tracker pulls active National Weather Service alerts for the area and tags each
       outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
-      storm is flagged <b>blue-sky</b> — a possible infrastructure issue rather than storm damage. Storm aftermath
-      (outages lingering after an alert expires) isn't counted as blue-sky.</p>
+      event is flagged <b>blue-sky</b> — a possible infrastructure issue rather than weather damage. Aftermath
+      (outages lingering after an alert expires) isn't counted as blue-sky. "Storm" is used only where weather appears
+      to be the cause; otherwise events are described neutrally as outage events.</p>
       <p><b>Data cross-check:</b> Each cycle we verify the headline number two ways. <em>Always:</em> our county-by-county
       sum is checked against FirstEnergy's <em>own</em> published Ohio total from the same feed — if they ever disagree
       (a county dropped out, a parse glitch, a stalled feed) the Now tab shows a yellow notice instead of the green
@@ -495,7 +537,9 @@
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
-      address. Anything saved locally stays in your browser's <code>localStorage</code>.</p>
+      address. Anything saved locally — including an optional <b>pinned area</b> — stays in your browser's
+      <code>localStorage</code>; it is never uploaded, shared, or included in the public snapshot, and there is no
+      default/personal location in the public view. Clear a pinned area anytime with its × button.</p>
       <p><b>Open data:</b> the shared dataset is public JSON, refreshed ~every 15 minutes —
       <a href="https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/tracker-data/state.json" target="_blank" rel="noopener">tracker-data/state.json</a>.
       Reuse it freely (it includes current outages, peaks, histories, reliability, ETR-accuracy, and weather).</p>
@@ -558,9 +602,15 @@ const NEO = {
   "PORTAGE":"Ohio Edison", "STARK":"Ohio Edison",    "WAYNE":"Ohio Edison",
   "TRUMBULL":"Ohio Edison","MAHONING":"Ohio Edison", "COLUMBIANA":"Ohio Edison"
 };
-const STATUS_LABEL = { major:"Major outage", assessing:"Assessing", progress:"In progress", restored:"Restored" };
+const STATUS_LABEL = { major:"Major outage", assessing:"No utility ETR", progress:"Restoring (ETR)", restored:"Restored" };
 const STATUS_COLOR = { major:"#e74c3c", significant:"#ff7a18", progress:"#3498db", restored:"#2ecc71" };
 const KEY = "neo_restoration_v3";
+// small inline confidence tag: high (raw source) · medium (estimate) · experimental (derived/model)
+function confTag(level){
+  const m = { high:["High confidence","conf-high"], medium:["Medium confidence","conf-med"],
+              low:["Low confidence","conf-low"], experimental:["Experimental","conf-exp"] }[level] || ["",""];
+  return m[0] ? `<span class="conf ${m[1]}" title="${m[0]} — see About for what this means">${m[0]}</span>` : "";
+}
 
 let store = loadStore();   // { peaks:{key:peak}, history:[{t,out}], lastUpdatedAt, countyHistory, cpp* }
 let latest = null;         // FirstEnergy
@@ -574,6 +624,9 @@ let etrCity = {};           // per-city ETR-accuracy aggregates (from shared sta
 let relTrend = [];          // daily NE Ohio availability % (from shared state)
 let crosscheck = null;      // independent poweroutage.us figures (from shared state)
 let causes = null;          // leading outage-cause breakdown (from shared state)
+let snapshotAt = null;      // when the shared snapshot was collected/published (collectedAt)
+let lastCheckedAt = null;   // when this browser last checked for updates
+let activeEvent = null;     // current in-progress outage event (from shared state's activeStorm)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let causeLayer = null, causeOn = false, causeTmpl = null, causeSeq = 0;
@@ -610,8 +663,8 @@ function titleCase(s){ return String(s||"").toLowerCase().replace(/\b\w/g, c=>c.
 function nameHtml(s){ return esc(titleCase(s)); }
 function timeStr(ts){ return ts ? new Date(ts).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "—"; }
 function etrStr(etr){
-  if(!etr || /null/i.test(etr)) return "Assessing";
-  const d = new Date(etr); if(isNaN(d)) return "Assessing";
+  if(!etr || /null/i.test(etr)) return "none given";
+  const d = new Date(etr); if(isNaN(d)) return "none given";
   return d.toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"});
 }
 function statusOf(out, served, etr){
@@ -633,6 +686,13 @@ function pctRestored(key, out){
   const peak = store.peaks[key] || 0;
   if(peak <= 0) return out>0 ? 0 : 100;
   return Math.max(0, Math.min(100, Math.round((peak - out)/peak*100)));
+}
+// change vs the previous snapshot, from a per-area history series
+function snapDeltaHtml(series){
+  if(!series || series.length < 2) return `<span style="color:var(--muted)">unavailable</span>`;
+  const d = series[series.length-1].out - series[series.length-2].out;
+  if(d === 0) return `<span style="color:var(--muted)">no change</span>`;
+  return `<span style="color:var(--${d>0?'bad':'good'})">${d>0?'▲ Up':'▼ Down'} ${fmt(Math.abs(d))}</span>`;
 }
 function centroid(bbox){ return bbox && bbox.length===4 ? [(bbox[1]+bbox[3])/2, (bbox[0]+bbox[2])/2] : null; }
 
@@ -735,6 +795,8 @@ function applyShared(s){
   relTrend = s.relTrend || [];
   crosscheck = s.crosscheck || null;
   causes = s.causes || null;
+  snapshotAt = s.collectedAt || null;
+  activeEvent = s.activeStorm || null;
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -746,7 +808,8 @@ const STALE_MS = 25 * 60 * 1000;   // if the shared snapshot is older than this,
 async function refresh(manual){
   const btn = document.getElementById("refreshBtn");
   btn.disabled = true; btn.textContent = "↻ Updating…";
-  setLive("stale","Updating…");
+  setLive("stale","Checking…");
+  lastCheckedAt = Date.now();
 
   // Prefer the shared, server-collected snapshot so all visitors see identical data.
   // applyShared() (inside loadShared) also seeds the back-dated history + peaks.
@@ -756,17 +819,18 @@ async function refresh(manual){
 
   if(fresh){
     sharedMode = true;
-    hideBanner(); setLive("live","Live");
-    setSrcMode("shared feed · collected ~every 15 min" + (s.zeroSince ? " · awaiting reset" : ""));
+    hideBanner(); setLive("live","Near-live");
+    setSrcMode("Current snapshot · checks every 5 min · data updates ~15 min" + (s.zeroSince ? " · awaiting reset" : ""));
     render();
   } else {
     // Shared snapshot is missing or stale (e.g. the collector cron is delayed) —
-    // fetch live current numbers in this browser, keeping the shared back-dated
-    // history/peaks as the baseline that live points get appended to.
+    // fetch live current numbers in this browser directly from the utility feeds,
+    // keeping the shared back-dated history/peaks as the baseline new points append to.
     sharedMode = false;
-    setSrcMode(s ? "live feed · shared snapshot delayed" : "live feed · this browser");
+    setSrcMode(s ? "Live feed (fetched in your browser) · shared snapshot delayed" : "Live feed (fetched in your browser)");
     await refreshLive();
   }
+  renderDataHealth();
   btn.disabled = false; btn.textContent = "↻ Refresh now";
 }
 
@@ -801,7 +865,8 @@ async function refreshLive(){
       pruneCityHistory();
       store.lastUpdatedAt = data.updatedAt;
     }
-    hideBanner(); setLive("live","Live");
+    hideBanner(); setLive("live","Live feed");
+    snapshotAt = data.updatedAt || Date.now();
   } else {
     setLive("err","Feed error");
     showBanner("error","Couldn't reach the live FirstEnergy feed ("+(feR.reason && feR.reason.message || feR.reason)+"). Showing the last data retrieved; will retry next cycle.");
@@ -1031,7 +1096,7 @@ function renderMovers(){
     `<div><div class="mv-h ${cls}">${title}</div>` +
     (arr.length ? arr.map(m=>row(m,sign)).join("") : `<div class="mv-empty">no change</div>`) + `</div>`;
   el.innerHTML = `<div class="panel">
-    <h3>Top movers <small>cities with the biggest change since the last update</small></h3>
+    <h3>Top movers <small>cities with the biggest change since the last snapshot</small></h3>
     <div class="movers">
       ${col("▼ Most improved", "good", improved, "−")}
       ${col("▲ Biggest new outages", "bad", worsened, "+")}
@@ -1049,6 +1114,33 @@ function scopeCounties(){
 
 /* ---------- rendering ---------- */
 function setLive(cls, txt){ document.getElementById("liveState").innerHTML = `<span class="dot ${cls}"></span>${txt}`; }
+// honest freshness from snapshot age: Fresh <20m · Stale 20–45m · Very stale 45m+
+function freshnessOf(ageMin){
+  if(ageMin == null) return { lbl:"age unknown", cls:"dh-stale" };
+  if(ageMin < 20) return { lbl:"Fresh", cls:"dh-fresh" };
+  if(ageMin < 45) return { lbl:"Stale", cls:"dh-stale" };
+  return { lbl:"Very stale", cls:"dh-vstale" };
+}
+function renderDataHealth(){
+  const el = document.getElementById("dataHealth"); if(!el) return;
+  const now = Date.now();
+  // snapshot age = how old the displayed data is (collected time, or FE feed time in live mode)
+  const collected = sharedMode ? snapshotAt : (latest && latest.updatedAt) || snapshotAt;
+  const ageMin = collected ? Math.round((now - collected)/60000) : null;
+  const f = freshnessOf(ageMin);
+  const ago = t => t ? (Math.max(0, Math.round((now - t)/60000)) + " min ago") : "unavailable";
+  const items = [];
+  items.push(`FirstEnergy: <b>${latest && latest.updatedAt ? timeStr(latest.updatedAt) : "collection time unavailable"}</b>`);
+  items.push(`CPP: <b>${latestCPP && latestCPP.updatedAt ? timeStr(latestCPP.updatedAt) : "collection time unavailable"}</b>`);
+  items.push(`Weather alerts: <b>${weather && weather.updatedAt ? timeStr(weather.updatedAt) : "unavailable"}</b>`);
+  items.push(`App last checked: <b>${lastCheckedAt ? timeStr(lastCheckedAt) : "—"}</b>`);
+  el.innerHTML =
+    `<span class="dh-state ${f.cls}">${sharedMode ? "Current snapshot" : "Live feed"} · ${f.lbl}` +
+      `${ageMin!=null ? ` · snapshot age ${ageMin} min` : " · snapshot age unavailable"}</span>` +
+    `<div class="dh-items">${items.join("")}</div>` +
+    `<div class="dh-items" style="margin-top:2px">Checks every 5 min · shared data updates ~every 15 min.` +
+      ` ${sharedMode ? "" : "Shared snapshot delayed — showing the utility feed fetched directly in your browser."}</div>`;
+}
 function showBanner(kind,msg){ const b=document.getElementById("banner"); b.className="banner show "+kind; b.textContent=msg; }
 function hideBanner(){ document.getElementById("banner").className="banner"; }
 
@@ -1062,9 +1154,10 @@ function renderWeather(){
   const parts = Object.entries(byEvent)
     .map(([ev, cset]) => `<span class="wx-ev"><b>${esc(ev)}</b> — ${[...cset].map(c => esc(titleCase(c))).join(", ")}</span>`)
     .join(" · ");
+  const checked = (weather && weather.updatedAt) ? ` Checked ${esc(timeStr(weather.updatedAt))}.` : "";
   el.innerHTML = `<div class="wx-banner"><span aria-hidden="true">⛈️</span>
-    <span><b>Active weather alerts (NE Ohio):</b> ${parts}. Outages during these are weather-related;
-    outages with no alert get flagged as possible infrastructure issues.</span></div>`;
+    <span><b>Active weather alerts (NWS, NE Ohio):</b> ${parts}. Outages during these are likely weather-related;
+    outages with no alert get flagged as possible infrastructure issues.${checked}</span></div>`;
 }
 
 function renderReliabilityPanel(){
@@ -1094,7 +1187,7 @@ function renderReliabilityPanel(){
     </div>` : "";
 
   el.innerHTML = `<div class="panel">
-    <h3>City reliability <small>last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable</small></h3>
+    <h3>City reliability ${confTag('experimental')} <small>last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable · derived from collected snapshots</small></h3>
     <div class="movers">
       <div><div class="mv-h bad">Least dependable</div>${least.map(row).join("")}</div>
       <div><div class="mv-h good">Most dependable</div>${most.map(row).join("")}</div>
@@ -1148,13 +1241,13 @@ function renderEtr(){
     const slipTxt = slips ? ` · ${(slips/e.promises).toFixed(1)} push-backs/outage` : "";
     const pullTxt = e.etrPullIns ? ` · <span style="color:var(--good)">▲ beat estimate ${e.etrPullIns}×</span>` : "";
     const liveTxt = etrLiveTxt(e);
-    const badge = e.promises ? `<b style="color:${pct(e)>=80?'var(--good)':pct(e)>=50?'var(--warn)':'var(--bad)'}">${pct(e)}%</b>` : `<b style="color:var(--muted)">live</b>`;
+    const badge = e.promises ? `<b style="color:${pct(e)>=80?'var(--good)':pct(e)>=50?'var(--warn)':'var(--bad)'}">${pct(e)}%</b>` : `<b style="color:var(--muted)">active</b>`;
     return `<div class="rl-row etr-row" data-county="${esc(x.name)}" role="button" tabindex="0">`
       + `<span class="rl-name">${nameHtml(x.name)} County<small>${metTxt}${lateTxt}${slipTxt}${pullTxt}${liveTxt}</small></span>`
       + `<span class="rl-score">${badge} ›</span></div>`;
   };
   el.innerHTML = `<div class="panel">
-    <h3>FirstEnergy ETR accuracy &amp; stability <small>met by the promised time, and how often the estimate was pushed back · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
+    <h3>FirstEnergy ETR accuracy &amp; stability ${confTag('experimental')} <small>how often utility ETRs were met by the promised time, and how often they were pushed back · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
 }
 
@@ -1165,16 +1258,16 @@ function renderStormLog(){
   if(!pastStorms || !pastStorms.length){ el.innerHTML = ""; if(emptyEl) emptyEl.style.display = ""; return; }
   if(emptyEl) emptyEl.style.display = "none";
   el.innerHTML = `<div class="panel">
-    <h3>Storm log <small>completed events, auto-archived as each one is restored</small></h3>
+    <h3>Archived outage events <small>completed events, auto-archived as each one is restored · "storm" shown only where weather was the likely cause</small></h3>
     ${pastStorms.map((s,i)=>{
       const chips = [];
-      chips.push(`peak <b>${fmt(s.peakTotal)}</b> out`);
+      chips.push(`event peak <b>${fmt(s.peakTotal)}</b> out`);
       if(s.custHrsLost) chips.push(`<b>${fmt(s.custHrsLost)}</b> customer-hrs lost`);
       if(s.nOutPeak) chips.push(`<b>${fmt(s.nOutPeak)}</b> peak incidents`);
       if(s.maxGustMph) chips.push(`gusts to <b>${s.maxGustMph} mph</b>`);
       if(s.peakCPP) chips.push(`CPP peak <b>~${fmt(s.peakCPP)}</b>`);
       const restore = [];
-      if(s.toHalfHrs!=null) restore.push(`50% restored in <b>${esc(durStr(s.toHalfHrs))}</b>`);
+      if(s.toHalfHrs!=null) restore.push(`50% recovered in <b>${esc(durStr(s.toHalfHrs))}</b>`);
       if(s.to90Hrs!=null) restore.push(`90% in <b>${esc(durStr(s.to90Hrs))}</b>`);
       const hit = (s.topCounties&&s.topCounties.length) ? `hardest hit: <b>${s.topCounties.map(c=>esc(titleCase(c.name))).join(", ")}</b>` : "";
       const cz = stormCausesText(s);
@@ -1224,6 +1317,7 @@ function shareStorm(i){
 }
 
 function render(){
+  renderDataHealth();
   if(latest) renderFirstEnergy();
   renderCrosscheck();
   renderCausesPanel();
@@ -1251,30 +1345,43 @@ function renderFirstEnergy(){
   const showAll = document.getElementById("allChk").checked;
   const list = scopeCounties();
 
-  let totOut=0, totPeak=0, restoredCount=0, activeCount=0;
+  let totOut=0, restoredCount=0, activeCount=0;
   list.forEach(c=>{
-    totOut+=c.out; totPeak+=(store.peaks[c.name]||0);
+    totOut+=c.out;
     if(c.out<=0) restoredCount++; else activeCount++;
   });
-  const overallPct = totPeak>0 ? Math.max(0,Math.min(100, Math.round((totPeak-totOut)/totPeak*100))) : (totOut>0?0:100);
+  // Event peak = the single highest simultaneous total from the collected history — NOT the
+  // sum of per-area peaks (which overcounts, since different areas peak at different moments).
+  // Recovered from peak = (peak - current) / peak, clamped 0–100, safe when peak is 0.
+  const h = store.history || [];
+  let eventPeak = 0, eventPeakAt = null;
+  h.forEach(p=>{ if(p.out > eventPeak){ eventPeak = p.out; eventPeakAt = p.t; } });
+  if(activeEvent && (activeEvent.peakTotal||0) > eventPeak){ eventPeak = activeEvent.peakTotal; eventPeakAt = activeEvent.peakAt || eventPeakAt; }
+  if(eventPeak < totOut){ eventPeak = totOut; eventPeakAt = latest.updatedAt; }
+  const recovered = eventPeak > 0 ? Math.max(0, Math.min(100, Math.round((eventPeak - totOut)/eventPeak*100))) : (totOut>0?0:100);
+  const fromPeak = Math.max(0, eventPeak - totOut);
 
-  const h = store.history; let deltaHtml="";
+  let deltaHtml="";
   if(h.length>=2){
     const d = neoTotalOut(latest) - h[h.length-2].out;
-    deltaHtml = d===0 ? `<div class="delta">no change since last update</div>`
-      : `<div class="delta ${d>0?'up':'down'}">${d>0?'▲':'▼'} ${fmt(Math.abs(d))} since last update</div>`;
+    deltaHtml = d===0 ? `<div class="delta">no change since last snapshot</div>`
+      : `<div class="delta ${d>0?'up':'down'}">${d>0?'▲ Up':'▼ Down'} ${fmt(Math.abs(d))} since last snapshot</div>`;
+  } else {
+    deltaHtml = `<div class="delta">change since last snapshot unavailable</div>`;
   }
 
   const sumEl = document.getElementById("summary");
   sumEl.className = "summary" + (totOut===0 ? " allclear" : "");
   sumEl.innerHTML = `
-    <div class="stat stat--primary"><div class="label">Customers Without Power</div><div class="value">${fmt(totOut)}</div>${deltaHtml}</div>
-    <div class="stat"><div class="label">Peak Observed</div><div class="value">${fmt(totPeak)}</div></div>
-    <div class="stat"><div class="label">Restored So Far</div><div class="value">${fmt(Math.max(0,totPeak-totOut))}</div></div>
-    <div class="stat"><div class="label">Overall Restored</div><div class="value">${overallPct}%</div><div class="bar"><span style="width:${overallPct}%"></span></div><div class="note">${sharedMode ? "vs the storm peak (shared, collected server-side)" : "vs the peak seen since you opened this page"}</div></div>
-    <div class="stat"><div class="label">${showAll?"FE Ohio Counties":"NE Ohio Counties"}</div><div class="value small">${activeCount} active · ${restoredCount} clear</div></div>`;
+    <div class="stat stat--primary"><div class="label">FirstEnergy customers out</div><div class="value">${fmt(totOut)}</div>${deltaHtml}</div>
+    <div class="stat"><div class="label">Event peak</div><div class="value">${fmt(eventPeak)}</div><div class="note">${eventPeakAt?`at ${timeStr(eventPeakAt)}`:"—"}</div></div>
+    <div class="stat"><div class="label">Recovered from peak</div><div class="value">${recovered}%</div><div class="bar"><span style="width:${recovered}%"></span></div><div class="note">down ${fmt(fromPeak)} from event peak</div></div>
+    <div class="stat"><div class="label">${showAll?"FE Ohio counties":"NE Ohio counties"}</div><div class="value small">${activeCount} active · ${restoredCount} clear</div><div class="note">FirstEnergy data ${confTag('high')}</div></div>`;
 
   renderMovers();
+
+  const feSrc = document.getElementById("feSrcNote");
+  if(feSrc) feSrc.innerHTML = `By county / township · FirstEnergy customer-outage counts ${confTag('high')} · collected ${esc(timeStr(latest.updatedAt))}`;
 
   // county cards
   const cards = sortItems(list, "county");
@@ -1292,11 +1399,12 @@ function renderFirstEnergy(){
         <h3><span class="nm">${nameHtml(c.name)}</span><span class="pill ${st}">${STATUS_LABEL[st]}</span></h3>
         <div class="util">${esc(util)}</div>
         <div class="bar mini"><span style="width:${p}%"></span></div>
-        <div class="row"><span>Restored (vs peak)</span><b class="pct">${p}%</b></div>
+        <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
+        <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(store.countyHistory[c.name])}</b></div>
         <div class="row"><span>Restoration rate</span><b>${rateHtml(store.countyHistory[c.name], c.out, store.peaks[c.name])}</b></div>
-        <div class="row"><span>Peak / Served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
-        <div class="row"><span>Est. restoration</span><b>${esc(etrStr(c.etr))}</b></div>
+        <div class="row"><span>Event peak / served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
+        <div class="row"><span>Utility ETR</span><b>${esc(etrStr(c.etr))}</b></div>
         ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
           <canvas class="cspark" data-county="${esc(c.name)}" title="Customers out over time"></canvas></div>` : ""}
         <button class="btn more" type="button" data-county="${esc(c.name)}">
@@ -1392,16 +1500,17 @@ function renderCPP(){
   const rows = Object.entries(byFeeder).sort((a,b)=>b[1]-a[1])
     .map(([id,c])=>`<div class="row"><span>Feeder ${esc(id)}</span><b>~${fmt(c)} accounts</b></div>`).join("");
   body.innerHTML = `
+    <div class="sub-meta" style="margin-bottom:10px">Estimated affected accounts ${confTag('medium')} — feeder/area data, not a per-customer count.</div>
     <div class="summary" style="margin-bottom:14px">
-      <div class="stat"><div class="label">Approx. accounts affected</div><div class="value">~${fmt(acc)}</div></div>
+      <div class="stat"><div class="label">Estimated affected accounts</div><div class="value">~${fmt(acc)}</div></div>
       <div class="stat"><div class="label">Feeders out</div><div class="value">${n}</div></div>
-      <div class="stat"><div class="label">Peak observed</div><div class="value">~${fmt(peak)}</div></div>
-      <div class="stat"><div class="label">Restored vs peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
+      <div class="stat"><div class="label">Event peak</div><div class="value">~${fmt(peak)}</div></div>
+      <div class="stat"><div class="label">Recovered from peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
     </div>
     <div class="row" style="margin-bottom:6px"><span>Restoration rate</span><b>${rateHtml(store.cppHistory, acc, store.cppPeak)}</b></div>
     <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
     ${rows}
-    <div class="sub-meta" style="margin-top:8px">"Approx. accounts affected" is CPP's own estimate (accounts within ~100m of an out-of-service feeder) and areas may overlap. Data as of ${asOf}.</div>`;
+    <div class="sub-meta" style="margin-top:8px">CPP counts are approximate affected accounts/areas (accounts within ~100m of an out-of-service feeder; areas may overlap) and may not be directly equivalent to FirstEnergy customer-outage counts. Data collected ${asOf}.</div>`;
   requestAnimationFrame(()=> lineChart(document.getElementById("cpp_chart"), store.cppHistory, PURPLE,
     "CPP trend builds as live snapshots are collected."));
 }
@@ -1420,7 +1529,7 @@ function openDetail(name, focusId){
   const active = (c.subs||[]).filter(s=>s.out>0);
   document.getElementById("d_sub").textContent =
     `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
-    `ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out, store.peaks[name])}`;
+    `Utility ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out, store.peaks[name])}`;
   const subs = sortItems(c.subs||[], "city");
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
     const st = statusOf(s.out, s.served, s.etr);
@@ -1436,11 +1545,11 @@ function openDetail(name, focusId){
       </div>
       <div class="sub-meta">
         <span>${fmt(s.out)} out / ${fmt(s.served)} served</span>
-        <span>${p}% restored${peak?` (peak ${fmt(peak)})`:""}</span>
+        <span>${p}% recovered from peak${peak?` (peak ${fmt(peak)})`:""}</span>
       </div>
       <div class="sub-meta">
         <span>${rateHtml(store.cityHistory[s.id], s.out, store.peaks[s.id])}</span>
-        <span>ETR ${esc(etrStr(s.etr))}</span>
+        <span>Utility ETR ${esc(etrStr(s.etr))}</span>
       </div>
       <div class="sub-rel">${relLineHtml(s.id)}</div>
     </div>`;
@@ -1523,7 +1632,7 @@ function buildPlayback(){
 function updatePlayLabel(){
   const lab = document.getElementById("playLabel");
   if(!lab) return;
-  if(playIdx == null && !replay){ lab.textContent = "live"; return; }
+  if(playIdx == null && !replay){ lab.textContent = "now"; return; }
   const idx = playIdx == null ? timeline.length - 1 : playIdx;
   const t = timeline[idx];
   const pt = (replay ? replay.history : (store.history||[])).find(p=>p.t===t);
@@ -1564,8 +1673,8 @@ function stopReplay(){
 function showReplayBar(){
   const bar = document.getElementById("replayBar"); if(!bar || !replay) return;
   bar.hidden = false;
-  bar.innerHTML = `<span>⏪ Replaying <b>${esc(timeStr(replay.storm.startedAt))} – ${esc(timeStr(replay.storm.endedAt))}</b>`
-    + ` · peak ${fmt(replay.storm.peakTotal)} out · press ▶ or drag the slider</span>`
+  bar.innerHTML = `<span>⏪ Replaying outage event <b>${esc(timeStr(replay.storm.startedAt))} – ${esc(timeStr(replay.storm.endedAt))}</b>`
+    + ` · event peak ${fmt(replay.storm.peakTotal)} out · press ▶ or drag the slider</span>`
     + `<button class="btn" type="button" id="replayExit">✕ Exit replay</button>`;
   const ex = document.getElementById("replayExit"); if(ex) ex.addEventListener("click", stopReplay);
 }
@@ -1879,7 +1988,7 @@ function renderCausesPanel(){
   const bar = rows.map(r => `<span style="width:${(r.cust/tot*100).toFixed(1)}%;background:${r.color}" title="${esc(r.label)} — ${Math.round(r.cust/tot*100)}%"></span>`).join("");
   const legend = rows.map(r => `<span><i style="background:${r.color}"></i>${esc(r.label)} <b>${Math.round(r.cust/tot*100)}%</b></span>`).join("");
   el.innerHTML = `<div class="panel">
-    <h3>Why the power's out <small>leading causes across FirstEnergy Ohio${sampled}</small></h3>
+    <h3>Why the power's out ${confTag('experimental')} <small>leading causes across FirstEnergy Ohio${sampled} · classified from utility incident notes</small></h3>
     <div class="cbar">${bar}</div>
     <div class="legend causes-legend">${legend}</div></div>`;
 }
@@ -2012,7 +2121,7 @@ function drawChart(){
   const bands = (weatherLog||[]).map(e=>{ const from=Date.parse(e.onset)||e.firstSeen, to=Date.parse(e.ends)||e.lastSeen||Date.now(); return {from,to,sev:e.severity,label:e.event}; })
     .filter(b=>b.from && b.to && b.to>b.from);
   const note = document.getElementById("trendNote");
-  if(note) note.textContent = data.length<2 ? "building from live snapshots…" : (data.length+" snapshots" + (bands.length?" · shaded = active weather alerts":""));
+  if(note) note.textContent = data.length<2 ? "building from collected snapshots…" : (data.length+" snapshots" + (bands.length?" · shaded = active weather alerts":""));
   lineChart(document.getElementById("trendChart"), data, ORANGE,
     "Collecting live snapshots — the trend line appears after a couple of updates.",
     { tooltip:true, peak:true, bands, valueLabel:"customers out" });
@@ -2099,21 +2208,27 @@ function buildPlaceList(){
 }
 function searchMsg(html){ document.getElementById("searchMsg").innerHTML = html; }
 
-/* ---------- "My city" — pin a place to the top of Now ---------- */
+/* ---------- Pinned "watch area" — optional, local-only, never shared/published ----------
+   Stored only in this browser's localStorage. There is no hardcoded/default area, so the
+   public view stays neutral and regional until a visitor explicitly pins one. */
 let myCity = (()=>{ try { return JSON.parse(localStorage.getItem("neo_mycity") || "null"); } catch(e){ return null; } })();
 let pendingPin = null;
 function pinCity(){
   if(!pendingPin) return;
   myCity = pendingPin;
   try { localStorage.setItem("neo_mycity", JSON.stringify(myCity)); } catch(e){}
-  searchMsg(`📍 Pinned <b>${esc(myCity.label)}</b> to the top of the Now tab.`);
+  searchMsg(`📍 Pinned <b>${esc(myCity.label)}</b> to the top of Now. Saved only in this browser.`);
   showTab("now"); renderMyCity();
 }
 function clearMyCity(){ myCity = null; try { localStorage.removeItem("neo_mycity"); } catch(e){} renderMyCity(); }
 function renderMyCity(){
   const el = document.getElementById("mycity");
   if(!el) return;
-  if(!myCity || !latest){ el.innerHTML = ""; return; }
+  if(!latest){ el.innerHTML = ""; return; }
+  if(!myCity){
+    el.innerHTML = `<div class="panel mycity-prompt"><span>📍 <b>Search or pin an area</b> to track local restoration progress here. Your pinned area is saved only in this browser — it isn't shared or published.</span></div>`;
+    return;
+  }
   let out, served, etr, key, label, series, peak, countyName;
   if(myCity.kind === "county"){
     const c = latest.counties[myCity.name];
@@ -2130,12 +2245,13 @@ function renderMyCity(){
   const st = statusOf(out, served, etr);
   const p = pctRestored(key, out);
   el.innerHTML = `<div class="panel mycity-card card--${st}" data-county="${esc(countyName)}" role="button" tabindex="0">
-    <h3><span class="nm">📍 ${esc(label)} <span class="pill ${st}">${STATUS_LABEL[st]}</span></span>
-      <button type="button" class="x" id="unpinBtn" aria-label="Unpin city" title="Unpin">×</button></h3>
+    <h3><span class="nm">📍 Pinned area: ${esc(label)} <span class="pill ${st}">${STATUS_LABEL[st]}</span></span>
+      <button type="button" class="x" id="unpinBtn" aria-label="Clear pinned area" title="Clear pinned area">×</button></h3>
     <div class="row"><span>Currently out</span><b>${fmt(out)} / ${fmt(served)} served</b></div>
-    <div class="row"><span>Restored (vs peak)</span><b class="pct">${p}%</b></div>
+    <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
+    <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(series)}</b></div>
     <div class="row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>
-    <div class="row"><span>Est. restoration</span><b>${esc(etrStr(etr))}</b></div>
+    <div class="row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>
     ${myCity.kind==="city" ? `<div class="sub-rel" style="margin-top:9px">${relLineHtml(key)}</div>` : ""}
   </div>`;
 }
@@ -2310,6 +2426,7 @@ window.addEventListener("resize", ()=>{
 
 refresh(true);
 scheduleAuto();
+setInterval(renderDataHealth, 30000);   // keep "snapshot age" current between refreshes
 showTab(location.hash.slice(1) || "now");
 tabReady = true;
 </script>
