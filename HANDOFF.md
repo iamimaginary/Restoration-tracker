@@ -144,6 +144,10 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
                   ours:{ fe:<all-OH FE sum>, cpp:<our CPP accounts> } } | null },
   causes:{ sampledAt, totalCust, knownCust, incidents, fetches,   // budgeted Kübra cause crawl (or null)
            byCause:{ "<raw cause text>":{cust,n} } },             // page categorizes raw→Weather/Trees/Equipment/…
+           // NB: knownCust = sum of per-incident cust_a, which Kübra MASKS (small outages →~20) and overlaps
+           // (nested outages) → NOT comparable to totalCust. Never show as "% of customers". Panel shows
+           // cause SHARES (sum to 100%) + sampled-incident COUNT. Crawl dedupes incidents by point, tiles by
+           // quadkey, descends biggest-first, stops when only clusters < MIN_CLUSTER(8) remain (budget 220).
   _feUpdatedAt, _cppUpdatedAt
 }
 ```

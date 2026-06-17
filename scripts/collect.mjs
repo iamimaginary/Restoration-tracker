@@ -126,9 +126,9 @@ async function fetchFE(){
 
 /* ---------- outage causes: budget-capped quadtree crawl of Kübra cluster tiles ----------
    Cause/crew-status live only on individual incidents (cluster=false), which resolve at deep
-   zoom. We descend biggest-customers-first with a hard fetch budget and stop once we've
-   attributed most affected customers, so blue-sky is cheap and storms stay bounded (coverage
-   just drops, reported honestly). Best-effort: any failure leaves causes untouched. */
+   zoom. We descend biggest-clusters-first with a hard fetch budget and stop once only tiny
+   clusters remain, so blue-sky is cheap and storms stay bounded. Best-effort: any failure
+   leaves causes untouched. */
 const lon2tileX = (lon,z)=> Math.floor((lon+180)/360 * 2**z);
 const lat2tileY = (lat,z)=>{ const r=lat*Math.PI/180; return Math.floor((1 - Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2 * 2**z); };
 const tileQuadkey = (x,y,z)=>{ let q=""; for(let i=z;i>0;i--){ let d=0; const m=1<<(i-1); if(x&m)d+=1; if(y&m)d+=2; q+=String(d); } return q; };
@@ -142,26 +142,33 @@ async function fetchCauses(tmpl, totalCust){
     catch(e){ return []; }
   };
   const OHIO = [42.1123, -79.7766, 39.0936, -85.1123];   // N,E,S,W (FE OH service bbox)
-  const Z0 = 6, BUDGET = 220, COVER = 0.90, CONC = 8, MAXZ = 15;
+  const Z0 = 6, BUDGET = 220, CONC = 8, MAXZ = 15, MIN_CLUSTER = 8;   // stop once only tiny clusters remain
   let pq = [];
   for(let x=lon2tileX(OHIO[3],Z0); x<=lon2tileX(OHIO[1],Z0); x++)
     for(let y=lat2tileY(OHIO[0],Z0); y<=lat2tileY(OHIO[2],Z0); y++) pq.push({ q: tileQuadkey(x,y,Z0), cust: Infinity });
-  const byCause = {}; let knownCust = 0, incidents = 0, fetches = 0; const seen = new Set();
+  const byCause = {}; let knownCust = 0, incidents = 0, fetches = 0;
+  const seenPt = new Set(), fetched = new Set(); let ptless = 0;   // dedupe incidents by point; tiles by quadkey
   while(pq.length && fetches < BUDGET){
-    if(totalCust > 0 && knownCust >= COVER * totalCust) break;
     pq.sort((a,b)=> b.cust - a.cust);
-    const batch = pq.splice(0, Math.min(CONC, pq.length, BUDGET - fetches));
+    if(pq[0].cust < MIN_CLUSTER) break;                   // biggest-first; nothing significant left to descend
+    const batch = [];
+    while(batch.length < CONC && pq.length && fetches + batch.length < BUDGET){
+      const e = pq.shift(); if(fetched.has(e.q)) continue; fetched.add(e.q); batch.push(e);
+    }
+    if(!batch.length) break;
     fetches += batch.length;
     const results = await Promise.all(batch.map(e => tileGet(e.q).then(items => ({ e, items }))));
     for(const { e, items } of results){
       for(const it of items){
         const d = it.desc || {};
+        const pt = it.geom && it.geom.p && it.geom.p[0];
         if(d.cluster){
           if(e.q.length < MAXZ){ const cu = (d.cust_a && d.cust_a.val) || 0; for(const c of ["0","1","2","3"]) pq.push({ q: e.q + c, cust: cu }); }
         } else {
-          const pt = it.geom && it.geom.p && it.geom.p[0];
-          const key = (pt || "") + "|" + e.q;                 // incidents have no stable id; dedupe by point+tile
-          if(seen.has(key)) continue; seen.add(key);
+          // an incident has a stable point and can re-appear at deeper zoom (alongside sibling clusters),
+          // so dedupe by point — NOT by tile — to avoid counting it once per zoom level.
+          const key = pt || ("p" + (ptless++));
+          if(seenPt.has(key)) continue; seenPt.add(key);
           const label = causeText(d.cause) || "Assessing";
           const cu = (d.cust_a && d.cust_a.val) || 0;
           (byCause[label] = byCause[label] || { cust:0, n:0 }); byCause[label].cust += cu; byCause[label].n++;
@@ -170,6 +177,9 @@ async function fetchCauses(tmpl, totalCust){
       }
     }
   }
+  // NOTE: knownCust is a sum of per-incident customer counts, which Kübra masks/rounds for small
+  // outages and overlaps for nested ones — so it is NOT comparable to the official total and must
+  // not be shown as a "% of customers". The page reports the sampled incident count instead.
   return { sampledAt: Date.now(), totalCust, knownCust, incidents, fetches, byCause };
 }
 

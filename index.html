@@ -485,7 +485,7 @@
       crew status, and ETR, colored by cause. Zoomed out you'll see clusters ("N outages here"); zoom in and they
       resolve into individual outages. This is pulled live from FirstEnergy's map data only for the area on screen, so
       it costs nothing until you ask for it. The Now tab also shows a <b>"Why the power's out"</b> summary — the
-      leading causes across FirstEnergy Ohio (a sampled breakdown; the % of customers it covers is noted).</p>
+      leading causes across FirstEnergy Ohio, as a share of a sampled set of outages (the number sampled is noted).</p>
       <p><b>Privacy:</b> No accounts, cookies, analytics, or tracking. The shared snapshot is fetched from GitHub;
       map tiles and ZIP lookups from OpenStreetMap/CARTO and zippopotam.us; in fallback mode, live data from
       FirstEnergy (kubra.io) and Cleveland Public Power's ArcGIS. Those services (like any website) see your IP
@@ -1810,11 +1810,11 @@ function renderCausesPanel(){
     .filter(r => r.cust > 0).sort((x,y)=> y.cust - x.cust);
   if(!rows.length){ el.innerHTML = ""; return; }
   const tot = rows.reduce((s,r)=> s + r.cust, 0) || 1;
-  const coverage = c.totalCust > 0 ? Math.round(c.knownCust / c.totalCust * 100) : null;
-  const bar = rows.map(r => `<span style="width:${(r.cust/tot*100).toFixed(1)}%;background:${r.color}" title="${esc(r.label)} — ${fmt(r.cust)} customers"></span>`).join("");
+  const sampled = c.incidents ? ` · ${fmt(c.incidents)} outage${c.incidents===1?"":"s"} sampled` : "";
+  const bar = rows.map(r => `<span style="width:${(r.cust/tot*100).toFixed(1)}%;background:${r.color}" title="${esc(r.label)} — ${Math.round(r.cust/tot*100)}%"></span>`).join("");
   const legend = rows.map(r => `<span><i style="background:${r.color}"></i>${esc(r.label)} <b>${Math.round(r.cust/tot*100)}%</b></span>`).join("");
   el.innerHTML = `<div class="panel">
-    <h3>Why the power's out <small>leading causes across FirstEnergy Ohio${coverage!=null?` · based on ~${coverage}% of customers out`:""}</small></h3>
+    <h3>Why the power's out <small>leading causes across FirstEnergy Ohio${sampled}</small></h3>
     <div class="cbar">${bar}</div>
     <div class="legend causes-legend">${legend}</div></div>`;
 }
