@@ -350,11 +350,11 @@
   <div class="logo" aria-hidden="true">⚡</div>
   <div>
     <h1>Northeast Ohio Power Restoration Tracker</h1>
-    <div class="sub">Unofficial · near-live FirstEnergy &amp; Cleveland Public Power outage snapshots</div>
+    <div class="sub">Unofficial · near-live FirstEnergy outage snapshots + Cleveland Public Power estimates</div>
   </div>
   <div class="spacer"></div>
   <div class="updated" role="status" aria-live="polite">
-    <span id="liveState"><span class="dot stale"></span>Connecting…</span><br />
+    <span id="liveState"><span class="dot stale"></span>Connecting to shared snapshot…</span><br />
     Data collected <b id="lastUpdated">—</b><br />
     <span id="srcMode" class="srcmode"></span>
   </div>
@@ -368,8 +368,8 @@
 
   <div class="toolbar">
     <button class="primary" id="refreshBtn">↻ Refresh now</button>
-    <label class="toggle"><input type="checkbox" id="autoChk" checked /> Auto-refresh (5 min)</label>
-    <label class="toggle"><input type="checkbox" id="allChk" /> Show all FE Ohio counties</label>
+    <label class="toggle" title="Your browser checks for a new shared snapshot every 5 minutes; the shared data itself is collected ~every 15 minutes."><input type="checkbox" id="autoChk" checked /> Auto-check (5 min)</label>
+    <label class="toggle"><input type="checkbox" id="allChk" /> Show all FirstEnergy Ohio counties</label>
     <div class="search" role="search">
       <input id="searchInput" type="search" placeholder="Search city or ZIP…" list="placeList"
              aria-label="Search by city, township, county, or ZIP code" autocomplete="off" />
@@ -386,7 +386,7 @@
         <option value="name">Name A–Z</option>
       </select>
     </label>
-    <button id="exportBtn">⬇ Export JSON</button>
+    <button id="exportBtn" title="Export the public outage snapshot JSON (no pinned area or private local state)">⬇ Export JSON</button>
   </div>
   <div id="searchMsg" class="searchmsg"></div>
 
@@ -417,7 +417,7 @@
     </div>
     <div class="panel" id="cppPanel">
       <h3>
-        <span>Cleveland Public Power <small>municipal utility — separate from FirstEnergy · approximate data</small></span>
+        <span>Cleveland Public Power — estimated affected accounts <small>separate municipal utility · approximate feeder/area data, not FirstEnergy customer counts</small></span>
         <span id="cppStatus" class="pill assessing">—</span>
       </h3>
       <div id="cppBody"><div class="sub-meta">Loading Cleveland Public Power data…</div></div>
@@ -428,15 +428,15 @@
   <section class="tab" id="tab-map" role="tabpanel">
     <div class="panel">
       <h3>
-        <span>Outage Map — progress by location</span>
+        <span>Outage map — current snapshot by location <small>FirstEnergy city/county data · CPP feeder areas shown separately</small></span>
         <span class="map-ctrl">
           <span class="seg" id="granSeg">
             <button data-g="township" class="on">City / Township</button>
             <button data-g="county">County</button>
             <button data-g="heatmap">Heatmap</button>
           </span>
-          <label class="toggle"><input type="checkbox" id="restoredChk" /> include restored</label>
-          <label class="toggle"><input type="checkbox" id="causeChk" /> show causes</label>
+          <label class="toggle"><input type="checkbox" id="restoredChk" /> include recovered</label>
+          <label class="toggle" title="Loads FirstEnergy individual outage incidents for the visible area only"><input type="checkbox" id="causeChk" /> show causes (FE only)</label>
         </span>
       </h3>
       <div id="replayBar" class="replaybar" hidden></div>
@@ -448,16 +448,16 @@
       <div class="legend">
         <span><i style="background:#e74c3c"></i>Major (≥10% out)</span>
         <span><i style="background:#ff7a18"></i>Significant</span>
-        <span><i style="background:#3498db"></i>Restoring (utility ETR)</span>
-        <span><i style="background:#2ecc71"></i>Restored</span>
-        <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder</span>
-        <span>· bubble size = customers affected</span>
+        <span><i style="background:#3498db"></i>Utility ETR available</span>
+        <span><i style="background:#2ecc71"></i>Recovered in current event</span>
+        <span><i style="background:#a855f7;border-radius:3px"></i>CPP estimated affected accounts</span>
+        <span>· bubble size = affected count / estimate</span>
       </div>
       <div class="playback" id="playback" hidden>
         <button id="playBtn" type="button" title="Play / pause">▶</button>
         <input type="range" id="playSlider" min="0" max="0" value="0" step="1" aria-label="Outage event playback time" />
-        <span id="playLabel">now</span>
-        <button id="playLive" class="btn pin-mini" type="button">Now</button>
+        <span id="playLabel">current</span>
+        <button id="playLive" class="btn pin-mini" type="button" title="Jump back to the current snapshot">Back to current</button>
       </div>
     </div>
   </section>
@@ -476,16 +476,17 @@
 
   <!-- RELIABILITY -->
   <section class="tab" id="tab-reliability" role="tabpanel">
+    <div class="notice" style="margin-top:0">⚙ <b>Experimental</b> · derived from collected snapshots · <b>not</b> a utility reliability report. Scores are unstable early and improve over weeks.</div>
     <div id="utility"></div>
     <div id="reliability"></div>
     <div id="etr"></div>
-    <div id="reliabilityEmpty" class="empty" style="display:none">City reliability ratings and ETR-accuracy stats appear here once enough data has been collected (a few days). Building…</div>
+    <div id="reliabilityEmpty" class="empty" style="display:none">Reliability estimates and utility-ETR-accuracy stats appear here once at least 3 days of observations have been collected. Scores are unstable early and improve over weeks.</div>
   </section>
 
   <!-- STORMS -->
   <section class="tab" id="tab-storms" role="tabpanel">
     <div id="stormlog"></div>
-    <div id="stormsEmpty" class="empty" style="display:none">No completed outage events logged yet. When the current event is restored it'll be archived here, and the next one starts automatically.</div>
+    <div id="stormsEmpty" class="empty" style="display:none">No completed outage events archived yet. When the current event returns to a low baseline, it will be archived here and a new event will start automatically.</div>
   </section>
 
   <!-- ABOUT -->
@@ -517,13 +518,19 @@
       <span class="conf conf-med">Medium</span> = approximations like CPP affected-accounts;
       <span class="conf conf-exp">Experimental</span> = derived analytics (reliability scores, ETR-accuracy,
       cause classification, app restoration estimates). Derived features are kept because they're useful, but labeled
-      so they don't read as authoritative as the raw counts. The shared history <b>auto-advances</b> — when an event is
-      restored it's archived to the Events tab and the next one starts on its own.</p>
-      <p><b>Reliability score:</b> Once a city has ~3 days of observations, it gets a long-run reliability rating that
-      keeps averaging in as data accumulates. The headline is <em>availability</em> — the share of customer-time with
-      power (an ASAI-style measure) — graded A+ to F, alongside how often it has any outage and its worst severity
-      seen. It's built only from collected snapshots, so early on it reflects whatever storms fell in the window and
-      stabilizes over weeks.</p>
+      so they don't read as authoritative as the raw counts. The shared history <b>auto-advances</b> — when an event
+      returns to a low baseline it's archived to the Events tab and the next one starts on its own (this is a
+      threshold, not a utility-confirmed restoration).</p>
+      <p><b>Reliability estimate (experimental):</b> Once a city has ~3 days of observations, it gets a snapshot-derived
+      reliability <em>estimate</em> — this is not a utility reliability report. The headline is <em>availability</em>
+      — the share of customer-time with power (an ASAI-style measure) — graded A+ to F, alongside how often it has any
+      outage and its worst severity seen. It's built only from collected snapshots, so it's unstable early (reflecting
+      whatever events fell in the window) and stabilizes over weeks.</p>
+      <p><b>ETR accuracy (experimental):</b> For completed outages we compare each utility ETR against when power
+      actually came back — "met" if restored by the promised time — and count how often the estimate was pushed back.
+      Completed-event accuracy and current-outage ETR churn are shown together per county but labeled distinctly.
+      Cause classification on the Map and "Why the power's out" buckets FirstEnergy's reported incident causes and is
+      likewise experimental and FirstEnergy-only.</p>
       <p><b>Weather events:</b> The tracker pulls active National Weather Service alerts for the area and tags each
       outage as weather-related or not. An outage with <em>no</em> current/recent NWS alert and no active regional
       event is flagged <b>blue-sky</b> — a possible infrastructure issue rather than weather damage. Aftermath
@@ -1023,14 +1030,16 @@ function relScore(r){
 // Older records (before direction was tracked) fall back to the undirected total.
 function etrSlips(e){ return (e.etrSlips != null) ? e.etrSlips : (e.etrChanges || 0); }
 function etrLiveSlips(e){ return (e._epSlips != null) ? e._epSlips : (e._epChanges || 0); }
-// live, in-progress churn for the current outage → "↻ pushed back N× · ▲ moved up M×"
+// live, in-progress churn for a location's CURRENT continuous outage (resets only when the
+// location fully regains power — it is NOT tied to the app's outage-event windows, so a
+// long-running outage can carry a high count across multiple archived events).
 function etrLiveTxt(e){
   if(!e._epActive) return "";
   const parts = [];
   const s = etrLiveSlips(e), p = e._epPullIns || 0;
   if(s > 0) parts.push(`<b style="color:var(--warn)">↻ ETR pushed back ${s}×</b>`);
   if(p > 0) parts.push(`<b style="color:var(--good)">▲ moved up ${p}×</b>`);
-  return parts.length ? ` · ${parts.join(" · ")} this outage` : "";
+  return parts.length ? ` · <span title="Counts utility ETR revisions since this location last had power. It tracks this location's continuous outage — not the app's outage-event windows — so it can stay high across a new event if power never came back here.">${parts.join(" · ")} since power was lost here</span>` : "";
 }
 // compact per-city reliability line for the drill-down
 function etrSuffix(id){
@@ -1046,9 +1055,9 @@ function etrSuffix(id){
 function relLineHtml(id){
   const etr = etrSuffix(id);
   const sc = relScore(reliability[id]);
-  if(!sc) return `<span style="color:var(--muted)">Reliability: collecting…</span>${etr}`;
-  if(sc.building) return `<span style="color:var(--muted)">Reliability: building (${sc.days.toFixed(1)}d / 3d)</span>${etr}`;
-  return `Reliability <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
+  if(!sc) return `<span style="color:var(--muted)">Reliability estimate: collecting…</span>${etr}`;
+  if(sc.building) return `<span style="color:var(--muted)">Reliability estimate: collecting (${sc.days.toFixed(1)}d / 3d min)</span>${etr}`;
+  return `Reliability estimate <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
        + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
        + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "")
        + etr;
@@ -1157,7 +1166,8 @@ function renderDataHealth(){
       `${ageMin!=null ? ` · snapshot age ${ageMin} min` : " · snapshot age unavailable"}</div>` +
     `<div class="dh-items">${items.join("")}</div>` +
     `<div class="dh-foot">Checks every 5 min · shared data updates ~every 15 min.` +
-      `${sharedMode ? "" : " Shared snapshot delayed — showing the utility feed fetched directly in your browser."}</div>`;
+      `${sharedMode ? "" : " Shared snapshot delayed — showing the utility feed fetched directly in your browser."}` +
+      `${f.cls==="dh-vstale" ? ` <span class="dh-vstale">⚠ Use the utility sites for current status.</span>` : ""}</div>`;
 }
 function showBanner(kind,msg){ const b=document.getElementById("banner"); b.className="banner show "+kind; b.textContent=msg; }
 function hideBanner(){ document.getElementById("banner").className="banner"; }
@@ -1207,7 +1217,7 @@ function renderReliabilityPanel(){
     </div>` : "";
 
   el.innerHTML = `<div class="panel">
-    <h3>City reliability ${confTag('experimental')} <small>last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable · derived from collected snapshots</small></h3>
+    <h3>City reliability estimate ${confTag('experimental')} <small>snapshot-derived availability · last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable</small></h3>
     <div class="movers">
       <div><div class="mv-h bad">Least dependable</div>${least.map(row).join("")}</div>
       <div><div class="mv-h good">Most dependable</div>${most.map(row).join("")}</div>
@@ -1235,7 +1245,7 @@ function renderUtility(){
       <span class="rl-score"><b style="color:${relColor(relGrade(x.avail))}">${relGrade(x.avail)}</b> ${x.avail.toFixed(2)}%</span>
     </div>`).join("");
   el.innerHTML = `<div class="panel">
-    <h3>Utility comparison <small>customer-weighted availability over the last ~${rows[0].days.toFixed(0)} days</small></h3>
+    <h3>Utility comparison ${confTag('experimental')} <small>snapshot-derived, customer-weighted availability over the last ~${rows[0].days.toFixed(0)} days</small></h3>
     ${body}
     <div class="sub-meta" style="margin-top:8px">Cleveland Public Power is tracked separately (feeder-level, approximate) and isn't directly comparable here.</div>
   </div>`;
@@ -1267,7 +1277,7 @@ function renderEtr(){
       + `<span class="rl-score">${badge} ›</span></div>`;
   };
   el.innerHTML = `<div class="panel">
-    <h3>FirstEnergy ETR accuracy &amp; stability ${confTag('experimental')} <small>how often utility ETRs were met by the promised time, and how often they were pushed back · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
+    <h3>Utility ETR accuracy &amp; stability ${confTag('experimental')} <small>completed-event accuracy (met by the promised time) + current-outage ETR changes · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
 }
 
@@ -1278,7 +1288,7 @@ function renderStormLog(){
   if(!pastStorms || !pastStorms.length){ el.innerHTML = ""; if(emptyEl) emptyEl.style.display = ""; return; }
   if(emptyEl) emptyEl.style.display = "none";
   el.innerHTML = `<div class="panel">
-    <h3>Archived outage events <small>completed events, auto-archived as each one is restored · "storm" shown only where weather was the likely cause</small></h3>
+    <h3>Archived outage events <small>auto-archived when each event returns to a low baseline · "storm" shown only where weather was the likely cause</small></h3>
     ${pastStorms.map((s,i)=>{
       const chips = [];
       chips.push(`event peak <b>${fmt(s.peakTotal)}</b> out`);
@@ -1293,14 +1303,17 @@ function renderStormLog(){
       const cz = stormCausesText(s);
       const wx = (s.weatherEvents&&s.weatherEvents.length) ? `weather: ${s.weatherEvents.map(esc).join(", ")}` : "";
       const line2 = [hit, cz?`likely causes: <b>${esc(cz)}</b>`:"", wx].filter(Boolean).join(" · ");
+      const wxClass = (s.weatherEvents&&s.weatherEvents.length) ? "🌩 Likely weather-related" : "○ No active/recent NWS alert detected";
+      const peakAtTxt = s.peakAt ? ` at ${esc(timeStr(s.peakAt))}` : "";
       return `<div class="sl-row">
         <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}
           ${s.replayId?`<button class="btn pin-mini" type="button" data-replay="${esc(String(s.replayId))}">▶ Replay on map</button>`:""}
           <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
         <div class="sl-stats">${chips.map(c=>`<span>${c}</span>`).join("")}</div>
-        <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${restore.length?` · ${restore.join(" · ")}`:""}</div>
+        <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${peakAtTxt?` · peak${peakAtTxt}`:""}${restore.length?` · ${restore.join(" · ")}`:""}</div>
         ${line2?`<div class="sl-meta">${line2}</div>`:""}
-        ${(s.curve&&s.curve.length>=2)?`<canvas class="sl-curve" data-i="${i}" title="customers out over the storm"></canvas>`:""}
+        <div class="sl-meta">${wxClass} · FirstEnergy customers out (NE Ohio) ${confTag('experimental')}</div>
+        ${(s.curve&&s.curve.length>=2)?`<canvas class="sl-curve" data-i="${i}" title="customers out over the event"></canvas>`:""}
       </div>`;
     }).join("")}
   </div>`;
@@ -1333,7 +1346,7 @@ function shareStorm(i){
   const done = btn => { if(btn){ const o=btn.textContent; btn.textContent="Copied!"; setTimeout(()=>btn.textContent=o, 1500); } };
   const btn = document.querySelector(`#stormlog [data-storm="${i}"]`);
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>done(btn)).catch(()=>{}); }
-  else { try { prompt("Copy this storm summary:", text); } catch(e){} }
+  else { try { prompt("Copy this outage event summary:", text); } catch(e){} }
 }
 
 function render(){
@@ -1502,15 +1515,15 @@ function renderCPP(){
   const statusEl = document.getElementById("cppStatus");
   const body = document.getElementById("cppBody");
   if(!latestCPP){
-    statusEl.className = "pill assessing"; statusEl.textContent = "—";
-    body.innerHTML = `<div class="sub-meta">Couldn't load Cleveland Public Power data yet — it'll appear on the next refresh.</div>`;
+    statusEl.className = "pill assessing"; statusEl.textContent = "unavailable";
+    body.innerHTML = `<div class="sub-meta">CPP data unavailable — it'll appear on the next snapshot.</div>`;
     return;
   }
   const acc = latestCPP.accounts, n = latestCPP.feeders.length, peak = store.cppPeak||0;
   const asOf = esc(timeStr(latestCPP.updatedAt));
   if(n === 0 || acc === 0){
     statusEl.className = "pill restored"; statusEl.textContent = "No active outages";
-    body.innerHTML = `<div class="sub-meta">No active CPP feeder outages reported. Data as of ${asOf}.</div>`;
+    body.innerHTML = `<div class="sub-meta">CPP reports no active feeder outages. Data collected ${asOf}.</div>`;
     return;
   }
   statusEl.className = "pill major"; statusEl.textContent = `${n} feeder${n>1?"s":""} out`;
@@ -1532,13 +1545,13 @@ function renderCPP(){
     ${rows}
     <div class="sub-meta" style="margin-top:8px">CPP counts are approximate affected accounts/areas (accounts within ~100m of an out-of-service feeder; areas may overlap) and may not be directly equivalent to FirstEnergy customer-outage counts. Data collected ${asOf}.</div>`;
   requestAnimationFrame(()=> lineChart(document.getElementById("cpp_chart"), store.cppHistory, PURPLE,
-    "CPP trend builds as live snapshots are collected."));
+    "CPP trend builds as snapshots are collected."));
 }
 
 function renderEmptyError(){
   document.getElementById("summary").innerHTML = "";
   document.getElementById("grid").innerHTML =
-    `<div class="empty">Couldn't load the live feed and no cached data is available yet.<br>Check your connection and press <b>↻ Refresh now</b>.</div>`;
+    `<div class="empty">Shared snapshot unavailable and the direct utility feeds couldn't be reached; no cached data yet.<br>Check your connection and press <b>↻ Refresh now</b>, or use the utility sites for current status.</div>`;
 }
 
 /* ---------- county drill-down ---------- */
@@ -1652,7 +1665,7 @@ function buildPlayback(){
 function updatePlayLabel(){
   const lab = document.getElementById("playLabel");
   if(!lab) return;
-  if(playIdx == null && !replay){ lab.textContent = "now"; return; }
+  if(playIdx == null && !replay){ lab.textContent = "current"; return; }
   const idx = playIdx == null ? timeline.length - 1 : playIdx;
   const t = timeline[idx];
   const pt = (replay ? replay.history : (store.history||[])).find(p=>p.t===t);
@@ -1666,7 +1679,7 @@ async function startReplay(id){
   let data = null;
   try { data = await fetch(STORM_REPLAY_BASE + id + ".json?t=" + Math.floor(Date.now()/300000)).then(r=> r.ok ? r.json() : null); } catch(e){}
   if(btn){ btn.disabled = false; btn.textContent = "▶ Replay on map"; }
-  if(!data || !data.history || data.history.length < 2){ searchMsg("Replay data for that storm isn't available."); return; }
+  if(!data || !data.history || data.history.length < 2){ searchMsg("Replay data for that outage event isn't available."); return; }
   const counties = {};
   const ensure = nm => counties[nm] || (counties[nm] = { name:nm, loc:null, served:0, subs:[] });
   const countyHistory = {}, cityHistory = {};
@@ -2004,11 +2017,12 @@ function renderCausesPanel(){
     .filter(r => r.cust > 0).sort((x,y)=> y.cust - x.cust);
   if(!rows.length){ el.innerHTML = ""; return; }
   const tot = rows.reduce((s,r)=> s + r.cust, 0) || 1;
-  const sampled = c.incidents ? ` · ${fmt(c.incidents)} outage${c.incidents===1?"":"s"} sampled` : "";
+  const sampled = c.incidents ? `${fmt(c.incidents)} sampled FirstEnergy incident${c.incidents===1?"":"s"}` : "FirstEnergy sampled incidents";
+  const checked = latest && latest.updatedAt ? ` · checked ${esc(timeStr(latest.updatedAt))}` : "";
   const bar = rows.map(r => `<span style="width:${(r.cust/tot*100).toFixed(1)}%;background:${r.color}" title="${esc(r.label)} — ${Math.round(r.cust/tot*100)}%"></span>`).join("");
   const legend = rows.map(r => `<span><i style="background:${r.color}"></i>${esc(r.label)} <b>${Math.round(r.cust/tot*100)}%</b></span>`).join("");
   el.innerHTML = `<div class="panel">
-    <h3>Why the power's out ${confTag('experimental')} <small>leading causes across FirstEnergy Ohio${sampled} · classified from utility incident notes</small></h3>
+    <h3>Why the power's out ${confTag('experimental')} <small>${sampled} · FirstEnergy only (no CPP) · classified from incident notes${checked}</small></h3>
     <div class="cbar">${bar}</div>
     <div class="legend causes-legend">${legend}</div></div>`;
 }
@@ -2047,7 +2061,15 @@ function lineChart(canvas, data, color, emptyMsg, opts){
     top = Math.ceil(maxV/niceMax)*niceMax || 1;
   }
   const yFmt = opts.yFmt || (v=>Math.round(v).toLocaleString());
-  const xFmtAxis = opts.xFmt || (t=>new Date(t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}));
+  // default axis labels: compact + adaptive — time-only when all points are the same day
+  // (e.g. "9:32a"), otherwise short date+hour ("6/17 9a"), so they stay narrow on mobile.
+  const span = data.length ? data[data.length-1].t - data[0].t : 0;
+  const sameDay = data.length>0 && span < 24*3600*1000
+    && new Date(data[0].t).toDateString() === new Date(data[data.length-1].t).toDateString();
+  const defFmt = sameDay
+    ? (t=>{ const d=new Date(t), h=d.getHours(); return ((h%12)||12)+":"+String(d.getMinutes()).padStart(2,"0")+(h<12?"a":"p"); })
+    : (t=>{ const d=new Date(t), h=d.getHours(); return (d.getMonth()+1)+"/"+d.getDate()+" "+((h%12)||12)+(h<12?"a":"p"); });
+  const xFmtAxis = opts.xFmt || defFmt;
   const barW = opts.bars ? Math.max(3, Math.min(34, plotW/Math.max(1,data.length)*0.7)) : 0;
   const inset = opts.bars ? barW/2 + 4 : 0;          // keep first/last bars off the axis edges
   const x = i => pad.l + inset + (plotW-2*inset) * (data.length>1 ? i/(data.length-1) : 0.5);
@@ -2088,9 +2110,17 @@ function lineChart(canvas, data, color, emptyMsg, opts){
       ctx.font="bold 11px sans-serif"; ctx.textBaseline="bottom"; ctx.fillStyle="#ffd9b0";
       ctx.textAlign = cx > w-96 ? "right" : "left"; ctx.fillText("▲ peak "+yFmt(data[pi].out), cx + (cx>w-96?-6:6), cy-5);
     }
-    ctx.fillStyle="#93a4b8"; ctx.font="11px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="top";
-    const step=Math.max(1,Math.ceil(data.length/6));
-    data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText(xFmtAxis(d.t), x(i), pad.t+plotH+6); } });
+    // width-aware x labels: only draw as many as fit without overlapping, edge-aligned so
+    // the first/last never clip off the canvas — fixes overlapping dates on narrow (mobile) charts.
+    ctx.fillStyle="#93a4b8"; ctx.font="11px sans-serif"; ctx.textBaseline="top";
+    const yLab = pad.t+plotH+6;
+    const lblW = Math.max(40, ctx.measureText(xFmtAxis(data[data.length-1].t)).width) + 14;
+    const maxLabels = Math.max(2, Math.min(7, Math.floor(plotW / lblW)));
+    let idxs;
+    if(data.length <= maxLabels){ idxs = data.map((_,i)=>i); }
+    else { idxs = []; for(let k=0;k<maxLabels;k++) idxs.push(Math.round(k*(data.length-1)/(maxLabels-1))); }
+    idxs = [...new Set(idxs)];
+    idxs.forEach((i,k)=>{ ctx.textAlign = k===0 ? "left" : (k===idxs.length-1 ? "right" : "center"); ctx.fillText(xFmtAxis(data[i].t), x(i), yLab); });
   }
   paint();
   canvas._paint = paint;
@@ -2141,9 +2171,12 @@ function drawChart(){
   const bands = (weatherLog||[]).map(e=>{ const from=Date.parse(e.onset)||e.firstSeen, to=Date.parse(e.ends)||e.lastSeen||Date.now(); return {from,to,sev:e.severity,label:e.event}; })
     .filter(b=>b.from && b.to && b.to>b.from);
   const note = document.getElementById("trendNote");
-  if(note) note.textContent = data.length<2 ? "building from collected snapshots…" : (data.length+" snapshots" + (bands.length?" · shaded = active weather alerts":""));
+  const lastT = data.length ? data[data.length-1].t : null;
+  if(note) note.textContent = data.length<2 ? "building from collected snapshots…"
+    : (`${data.length} collected snapshots · ~15 min interval · FirstEnergy customers out`
+       + (lastT?` · last collected ${timeStr(lastT)}`:"") + (bands.length?" · shaded = active weather alerts":""));
   lineChart(document.getElementById("trendChart"), data, ORANGE,
-    "Collecting live snapshots — the trend line appears after a couple of updates.",
+    "Collecting snapshots — the trend line appears after a couple of updates.",
     { tooltip:true, peak:true, bands, valueLabel:"customers out" });
 }
 const GUST_HI = 45;   // mph — a gust this strong is a likely outage-causing wind/storm day
@@ -2160,9 +2193,9 @@ function drawRelTrend(){
   (weatherLog||[]).forEach(e=>{ if(/severe|extreme/i.test(e.severity||"")){ const a=Date.parse(e.onset)||e.firstSeen, b=Date.parse(e.ends)||e.lastSeen||a; if(a) for(let t=a;t<=b;t+=864e5) stormDays.add(dayStr(t)); } });
   data.forEach(d=>{ if(d.gust >= GUST_HI) stormDays.add(d.day); });
   const anyStorm = data.some(d=>stormDays.has(d.day));
-  if(note) note.textContent = data.length < 2 ? "daily NE Ohio availability — builds over days"
-    : (data.length+" days" + (anyStorm ? " · orange = storm / high-wind day" : ""));
-  lineChart(cv, data, BLUE, "Daily availability appears here after a couple of days of data.",
+  if(note) note.textContent = data.length < 2 ? "experimental · unavailable until at least 3 days of observations"
+    : (`${data.length} days · experimental, derived from collected snapshots` + (anyStorm ? " · orange = high-wind / alert day" : ""));
+  lineChart(cv, data, BLUE, "Experimental daily availability appears here after at least 3 days of observations.",
     { tooltip:true, bars:true, yMode:"zoom", absMax:100, minPad:0.4, stormDays,
       barLabel: d => (d.gust && stormDays.has(d.day)) ? (d.gust + " mph") : null,
       yFmt:v=>v.toFixed(2)+"%", valueLabel:"uptime",
@@ -2171,7 +2204,7 @@ function drawRelTrend(){
 }
 function drawCountyChart(name){
   lineChart(document.getElementById("d_chart"), store.countyHistory[name] || [], BLUE,
-    "This county's curve appears once a few live snapshots are collected.");
+    "This county's curve appears once a few snapshots are collected.");
 }
 /* tiny inline sparkline of customers-out over time (no axes) — falling = recovering */
 function sparkline(canvas, data, color){
@@ -2199,8 +2232,18 @@ function exportData(){
   const mergeMap = (a,b)=>{ const o={}; for(const k in (a||{})) o[k]=(a[k]||[]).slice(); for(const k in (b||{})) o[k]=mergeSeries(o[k], b[k]); return o; };
   const maxPeaks = (a,b)=>{ const o={...(a||{})}; for(const k in (b||{})) if((o[k]||0)<b[k]) o[k]=b[k]; return o; };
   const payload = {
-    exportedAt: new Date().toISOString(),
-    sources: ["FirstEnergy Ohio Storm Center (KUBRA)", "Cleveland Public Power (City of Cleveland ArcGIS)", "poweroutage.us (independent cross-check)"],
+    meta: {
+      exportedAt: new Date().toISOString(),
+      snapshotCollectedAt: snapshotAt ? new Date(snapshotAt).toISOString() : null,
+      appCheckedAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
+      sourceMode: sharedMode ? "shared-snapshot" : "direct-live-fallback",
+      schemaVersion: 1,
+      sources: ["FirstEnergy Ohio Storm Center (KUBRA) — customer outage counts", "Cleveland Public Power (City of Cleveland ArcGIS) — approximate feeder/area affected accounts", "poweroutage.us — independent cross-check (when reachable)"],
+      cppApproximate: true,                 // CPP = estimated affected accounts, not FE-equivalent customer counts
+      derivedAnalyticsIncluded: true,       // reliability/ETR-accuracy/causes are app-derived (experimental)
+      pinnedAreaIncluded: false,            // pinned area is local-only and intentionally excluded
+      note: "Public outage snapshot. FirstEnergy and CPP are different measurements and are not summed."
+    },
     firstEnergy: latest, cpp: latestCPP, crosscheck,
     peaks: maxPeaks(loc && loc.peaks, store.peaks),
     history: mergeSeries(loc && loc.history, store.history),
@@ -2441,7 +2484,7 @@ window.addEventListener("resize", ()=>{
   if(latest) drawChart();
   if(detailOpen) drawCountyChart(detailOpen);
   const cc = document.getElementById("cpp_chart");
-  if(cc && latestCPP) lineChart(cc, store.cppHistory, PURPLE, "CPP trend builds as live snapshots are collected.");
+  if(cc && latestCPP) lineChart(cc, store.cppHistory, PURPLE, "CPP trend builds as snapshots are collected.");
 });
 
 refresh(true);
