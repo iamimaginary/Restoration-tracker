@@ -1689,8 +1689,8 @@ async function startReplay(id){
     timeline: data.history.map(p=>p.t), history: data.history,
     counties: Object.values(counties), countyHistory, cityHistory };
   playIdx = 0;
-  granularity = "heatmap";
-  [...document.querySelectorAll("#granSeg button")].forEach(x=>x.classList.toggle("on", x.dataset.g==="heatmap"));
+  granularity = "township";                       // replays open at city/township detail
+  [...document.querySelectorAll("#granSeg button")].forEach(x=>x.classList.toggle("on", x.dataset.g==="township"));
   if(map) map._fitOnce = false;
   showReplayBar();
   showTab("map");
