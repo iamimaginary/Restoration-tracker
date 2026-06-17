@@ -292,16 +292,24 @@
   .modal .msub { color:var(--muted); font-size:12px; margin-bottom:14px; }
   .modal .x { cursor:pointer; color:var(--muted); font-size:22px; line-height:1; background:none; border:none; padding:0 4px; }
   .modal .x:hover { color:#fff; border:none; }
-  .sub-list { max-height:55vh; overflow:auto; margin:0 -4px; padding:0 4px; }
-  .sub-item { padding:10px 0; border-top:1px solid var(--line); }
+  .modal { max-height:92vh; overflow-y:auto; }                       /* whole drawer scrolls on small screens */
+  .modal .msub-line { margin-bottom:4px; line-height:1.45; }
+  .modal .msub-line:last-child { margin-bottom:0; }
+  .modal .msub-line b { font-weight:700; }
+  .sub-list { margin:0 -2px; padding:0 2px; }                        /* no inner scroll — single modal scroll */
+  .sub-item { padding:12px 0; border-top:1px solid var(--line); }
   .sub-item:first-child { border-top:none; }
   .sub-item.sub-hl { outline:2px solid var(--accent); outline-offset:3px; border-radius:8px; animation:subHl 1.8s ease; }
   @keyframes subHl { 0%{ background:rgba(255,122,24,.30); } 100%{ background:transparent; } }
-  .sub-head { display:flex; justify-content:space-between; gap:10px; font-size:14px; }
+  .sub-head { display:flex; justify-content:space-between; gap:8px 10px; font-size:14px; flex-wrap:wrap; align-items:flex-start; }
   .sub-head .snm { font-weight:600; }
   .sub-meta { display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--muted); margin-top:4px; }
+  .sub-fact { font-size:12px; color:var(--muted); margin-top:3px; line-height:1.45; }
+  .sub-fact b { color:var(--text); font-weight:600; }
+  .sub-fact small { opacity:.8; }
   .sub-rel { font-size:11.5px; color:var(--muted); margin-top:4px; }
   .sub-rel b { font-weight:700; }
+  @media (max-width:480px){ .modal { padding:16px 15px calc(22px + env(safe-area-inset-bottom)); } }
   .rl-row { display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:5px 0; border-top:1px solid var(--line-soft); }
   .rl-row:first-of-type { border-top:none; }
   .rl-name { display:flex; flex-direction:column; line-height:1.2; }
@@ -583,7 +591,8 @@
     <div class="msub" id="d_sub"></div>
     <div class="dlabel">Restoration trend — whole county</div>
     <canvas id="d_chart" style="height:170px;display:block;margin-bottom:14px"></canvas>
-    <div class="dlabel">By city / township <span>· sparkline = customers out over time (falling = recovering)</span></div>
+    <div class="dlabel">By city / township <span>Sparkline shows customers out over time · falling = recovering</span></div>
+    <div class="msub" style="margin:-4px 0 8px">City/township rows use FirstEnergy current-snapshot data.</div>
     <div class="sub-list" id="d_list"></div>
   </div>
 </div>
@@ -1002,33 +1011,43 @@ function postPeakCount(series){
 }
 function rateInfo(series, out, peak){
   const n = series ? series.length : 0;
-  if(out <= 0) return { cls:"good", txt:"✓ fully restored" };
+  if(out <= 0) return { cls:"good", kind:"restored", n };
   const r = restorationRate(series);
-  if(!r) return { cls:"muted", txt:"rate: collecting…" };
+  if(!r) return { cls:"muted", kind:"collecting", n };
   const ph = r.perHour;
-  const meaningful = Math.abs(ph) >= Math.max(5, out * 0.01);
-  if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
+  if(Math.abs(ph) < Math.max(5, out * 0.01)) return { cls:"muted", kind:"holding", n };
   if(ph > 0){
-    let eta = out / ph;                                    // observed (linear from the recent rate)
-    let usedPrior = false;
-    // Blend a historical recovery-pace prior, weighted heavily early (few post-peak readings)
-    // and fading to the observed decline as this outage accrues data. Steadies wild early ETAs.
+    // observed (linear) hours-to-baseline, blended with a fading historical-pace prior:
+    // weighted heavily early (few post-peak readings), fading to the observed decline.
+    let eta = out / ph, usedPrior = false;
     const prior = priorEta(out, peak);
-    if(prior != null){
-      const w = Math.min(1, postPeakCount(series) / 8);    // 0 → all prior, 1 (8+ readings) → all observed
-      eta = w*eta + (1-w)*prior;
-      usedPrior = w < 0.75;
-    }
-    if(eta <= 48) return { cls:"good", txt:`▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)`, algo:true, n, prior:usedPrior };
-    return { cls:"good", txt:`▼ restoring slowly (~${fmt(ph)} restored/hr)`, algo:true, n, prior:usedPrior };
+    if(prior != null){ const w = Math.min(1, postPeakCount(series) / 8); eta = w*eta + (1-w)*prior; usedPrior = w < 0.75; }
+    return { cls:"good", kind:"improving", perHour:ph, etaHrs:eta, algo:true, prior:usedPrior, n };
   }
-  return { cls:"bad", txt:`▲ rising (~${fmt(-ph)} added/hr)`, algo:true, n };
+  return { cls:"bad", kind:"rising", perHour:-ph, n };
 }
-// the restoration rate / time-to-clear is the app's OWN projection, not a utility ETR — label it
+// bare trend phrase (callers add "Trend:" / icons). Avoids "clear/added" → observed-data wording.
+function trendText(i){
+  switch(i.kind){
+    case "restored":   return "fully restored";
+    case "collecting": return "collecting…";
+    case "holding":    return "holding steady";
+    case "improving":  return `improving · ~${fmt(i.perHour)} restored/hr`;
+    case "rising":     return `rising · ~${fmt(i.perHour)} more out/hr`;
+  }
+  return "";
+}
+const RATE_ICON = { restored:"✓ ", improving:"▼ ", rising:"▲ ", holding:"↔ ", collecting:"" };
+// app/algorithmic estimate phrase — extrapolation, never an official prediction
+function estText(i){
+  if(i.kind !== "improving" || i.etaHrs == null || i.etaHrs > 48) return "";
+  return `App estimate: ~${durStr(i.etaHrs)} to baseline if recent pace holds`;
+}
+// the restoration estimate is the app's OWN projection, not a utility ETR — label it
 // as algorithmically generated, note how much current-event data it uses, and flag when an early
 // estimate is leaning on past events.
 function algoTag(i){
-  if(!i.algo) return "";
+  if(!i || !i.algo) return "";
   const label = `⚙ algorithmic · ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""}`;
   const title = i.prior
     ? `Early estimate: blended from this location's ${i.n} reading${i.n===1?"":"s"} AND the typical recovery pace of past events. As more readings arrive it relies on the live decline. The app's own projection, not a utility ETR.`
@@ -1036,8 +1055,17 @@ function algoTag(i){
   return ` <span class="algo" title="${title}">${label}</span>`;
 }
 const RATE_COLOR = { good:"var(--good)", bad:"var(--bad)", muted:"var(--muted)" };
-function rateHtml(series, out, peak){ const i = rateInfo(series, out, peak); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>${algoTag(i)}`; }
-function ratePlain(series, out, peak){ const i = rateInfo(series, out, peak); return i.txt + (i.algo ? ` (algorithmic est. from ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""})` : ""); }
+function rateHtml(series, out, peak){
+  const i = rateInfo(series, out, peak);
+  const est = estText(i);
+  return `<span style="color:${RATE_COLOR[i.cls]}">${RATE_ICON[i.kind]||""}${trendText(i)}</span>` + (est?` · ${est}`:"") + algoTag(i);
+}
+function ratePlain(series, out, peak){
+  const i = rateInfo(series, out, peak);
+  const est = estText(i);
+  return `${RATE_ICON[i.kind]||""}${trendText(i)}` + (est?` · ${est}`:"")
+    + (i.algo ? ` (⚙ algorithmic · ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""})` : "");
+}
 
 /* ---------- long-run per-city reliability score ---------- */
 // Built from the persistent reliability aggregates the collector accumulates over
@@ -1100,6 +1128,30 @@ function relLineHtml(id){
        + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
        + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "")
        + etr;
+}
+// drawer-only: reliability status and ETR-change history split into separate lines (not crammed).
+function relStatusLine(id){
+  const sc = relScore(reliability[id]);
+  if(!sc) return "Reliability estimate: collecting…";
+  if(sc.building) return `Reliability estimate: collecting · ${sc.days.toFixed(1)}d / 3d minimum`;
+  return `Reliability estimate <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
+    + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
+    + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "");
+}
+// neutral, observed-data wording for ETR volatility on the current outage
+function etrChangeLine(id){
+  const e = etrCity[id];
+  if(!e || !e._epActive) return "";
+  const later = (e._epSlips != null ? e._epSlips : e._epChanges) || 0, earlier = e._epPullIns || 0;
+  if(!later && !earlier) return "";
+  if(earlier === 0) return `Utility ETR moved later ${later}× since outage began`;
+  if(later === 0)   return `Utility ETR moved earlier ${earlier}× since outage began`;
+  return `Utility ETR changed ${later + earlier}× since outage began`;
+}
+function etrMetLine(id){
+  const e = etrCity[id];
+  if(!e || !e.promises) return "";
+  return `Completed-event utility ETR: ${e.met}/${e.promises} met (${Math.round(e.met/e.promises*100)}%)`;
 }
 
 /* ---------- editable sorting (applies to county grid + drill-down) ---------- */
@@ -1184,6 +1236,17 @@ function freshnessOf(ageMin){
   if(ageMin < 20) return { lbl:"Fresh", cls:"dh-fresh" };
   if(ageMin < 45) return { lbl:"Stale", cls:"dh-stale" };
   return { lbl:"Very stale", cls:"dh-vstale" };
+}
+// one-line freshness summary for the detail drawer (honest about stale local data)
+function freshnessLine(){
+  const now = Date.now();
+  const collected = sharedMode ? snapshotAt : (latest && latest.updatedAt) || snapshotAt;
+  const ageMin = collected ? Math.round((now - collected)/60000) : null;
+  const checked = lastCheckedAt ? timeStr(lastCheckedAt) : null;
+  if(ageMin == null) return `Collection time unavailable${checked?` · app checked: ${esc(checked)}`:""}`;
+  if(ageMin >= 45) return `<b class="dh-vstale">Very stale snapshot</b> — use utility sites for current status · last collected ${esc(timeStr(collected))}`;
+  if(ageMin >= 20) return `<b class="dh-stale">Stale snapshot</b> · last collected ${ageMin} min ago`;
+  return `Data collected: ${esc(timeStr(collected))} · app checked: ${esc(checked||"—")} · snapshot age: ${ageMin} min`;
 }
 function renderDataHealth(){
   const el = document.getElementById("dataHealth"); if(!el) return;
@@ -1599,15 +1662,33 @@ function openDetail(name, focusId){
   if(!c) return;
   document.getElementById("d_title").textContent = titleCase(name) + " County";
   const active = (c.subs||[]).filter(s=>s.out>0);
-  document.getElementById("d_sub").textContent =
-    `Source: FirstEnergy · ${NEO[name]||"FirstEnergy"} · High confidence · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
-    `Utility ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out, store.peaks[name])}`;
+  // stacked county header: source/confidence · count · utility ETR · app estimate · trend · freshness
+  const ci = rateInfo(store.countyHistory[name], c.out, store.peaks[name]);
+  const cEst = estText(ci).replace(/^App estimate:/, "Algorithmic estimate:");
+  const hd = [
+    `Source: FirstEnergy · ${esc(NEO[name]||"FirstEnergy")} · High confidence`,
+    `${fmt(c.out)} customers out across ${active.length} of ${c.subs.length} cities/townships`,
+    `Utility ETR: ${esc(etrStr(c.etr))}`
+  ];
+  if(cEst) hd.push(cEst);
+  hd.push(ci.kind==="restored" ? "✓ Fully restored"
+        : ci.kind==="improving" ? `Based on ${ci.n} reading${ci.n===1?"":"s"} · ~${fmt(ci.perHour)} restored/hr${ci.prior?" + past events":""}`
+        : `Trend: ${trendText(ci)}`);
+  hd.push(freshnessLine());
+  document.getElementById("d_sub").innerHTML = hd.map(l=>`<div class="msub-line">${l}</div>`).join("");
   const subs = sortItems(c.subs||[], "city");
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
     const st = statusOf(s.out, s.served, s.etr);
     const p = pctRestored(s.id, s.out);
     const peak = store.peaks[s.id]||0;
     const hasSpark = (store.cityHistory[s.id]||[]).length >= 2;
+    const i = rateInfo(store.cityHistory[s.id], s.out, store.peaks[s.id]);
+    const sev = s.served>0 ? (s.out/s.served*100) : null;
+    const sevTxt = sev==null ? null : (sev<0.1 ? sev.toFixed(2) : sev<10 ? sev.toFixed(1) : Math.round(sev));
+    const est = estText(i), chg = etrChangeLine(s.id), met = etrMetLine(s.id);
+    const trendLine = i.kind==="restored" ? `<span style="color:var(--good)">✓ Fully restored</span>`
+                    : i.kind==="collecting" ? `Trend: collecting…`
+                    : `Trend: <span style="color:${RATE_COLOR[i.cls]}">${trendText(i)}</span>`;
     return `<div class="sub-item" data-city="${esc(s.id)}">
       <div class="sub-head"><span class="snm">${nameHtml(s.name)}</span>
         <span class="pill ${st}" style="font-size:10px">${STATUS_LABEL[st]}</span></div>
@@ -1615,15 +1696,15 @@ function openDetail(name, focusId){
         <div class="bar thin" style="flex:1"><span style="width:${p}%"></span></div>
         ${hasSpark ? `<canvas class="spark" data-city="${esc(s.id)}" title="Customers out over time"></canvas>` : `<span class="spark-wait">collecting…</span>`}
       </div>
-      <div class="sub-meta">
-        <span>${fmt(s.out)} out / ${fmt(s.served)} served</span>
-        <span>${p}% recovered from peak${peak?` (peak ${fmt(peak)})`:""}</span>
-      </div>
-      <div class="sub-meta">
-        <span>${rateHtml(store.cityHistory[s.id], s.out, store.peaks[s.id])}</span>
-        <span>Utility ETR ${esc(etrStr(s.etr))}</span>
-      </div>
-      <div class="sub-rel">${relLineHtml(s.id)}</div>
+      <div class="sub-fact">${fmt(s.out)} out / ${fmt(s.served)} served</div>
+      ${sevTxt!=null ? `<div class="sub-fact">${sevTxt}% of served customers currently out</div>` : ""}
+      <div class="sub-fact">${p}% recovered from event peak${peak?` · peak ${fmt(peak)}`:""}</div>
+      <div class="sub-fact">${trendLine}</div>
+      ${est ? `<div class="sub-fact">${est}${algoTag(i)}</div>` : ""}
+      <div class="sub-fact">Utility ETR: ${esc(etrStr(s.etr))}</div>
+      ${chg ? `<div class="sub-fact">${chg}</div>` : ""}
+      ${met ? `<div class="sub-fact">${met}</div>` : ""}
+      <div class="sub-fact">${relStatusLine(s.id)}</div>
     </div>`;
   }).join("") : `<div class="sub-meta">No sub-area detail reported for this county.</div>`;
   requestAnimationFrame(()=>{
