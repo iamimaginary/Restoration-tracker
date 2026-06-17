@@ -368,7 +368,7 @@
 
   <div class="toolbar">
     <button class="primary" id="refreshBtn">↻ Refresh now</button>
-    <label class="toggle" title="Your browser checks for a new shared snapshot every 5 minutes; the shared data itself is collected ~every 15 minutes."><input type="checkbox" id="autoChk" checked /> Auto-check (5 min)</label>
+    <label class="toggle" title="Your browser checks for a new shared snapshot every 5 minutes; the shared data itself is collected ~every 15 minutes."><input type="checkbox" id="autoChk" checked /> Checks every 5 min · data updates ~15 min</label>
     <label class="toggle"><input type="checkbox" id="allChk" /> Show all FirstEnergy Ohio counties</label>
     <div class="search" role="search">
       <input id="searchInput" type="search" placeholder="Search city or ZIP…" list="placeList"
@@ -450,14 +450,14 @@
         <span><i style="background:#ff7a18"></i>Significant</span>
         <span><i style="background:#3498db"></i>Utility ETR available</span>
         <span><i style="background:#2ecc71"></i>Recovered in current event</span>
-        <span><i style="background:#a855f7;border-radius:3px"></i>CPP estimated affected accounts</span>
+        <span><i style="background:#a855f7;border-radius:3px"></i>Cleveland Public Power feeder estimate</span>
         <span>· bubble size = affected count / estimate</span>
       </div>
       <div class="playback" id="playback" hidden>
         <button id="playBtn" type="button" title="Play / pause">▶</button>
         <input type="range" id="playSlider" min="0" max="0" value="0" step="1" aria-label="Outage event playback time" />
-        <span id="playLabel">current</span>
-        <button id="playLive" class="btn pin-mini" type="button" title="Jump back to the current snapshot">Back to current</button>
+        <span id="playLabel">Current snapshot</span>
+        <button id="playLive" class="btn pin-mini" type="button" title="Jump back to the current snapshot">Back to current snapshot</button>
       </div>
     </div>
   </section>
@@ -486,7 +486,7 @@
   <!-- STORMS -->
   <section class="tab" id="tab-storms" role="tabpanel">
     <div id="stormlog"></div>
-    <div id="stormsEmpty" class="empty" style="display:none">No completed outage events archived yet. When the current event returns to a low baseline, it will be archived here and a new event will start automatically.</div>
+    <div id="stormsEmpty" class="empty" style="display:none">No completed outage events archived yet. When the current event returns to baseline, it will be archived here and a new event will start automatically.</div>
   </section>
 
   <!-- ABOUT -->
@@ -618,7 +618,7 @@ const NEO = {
   "PORTAGE":"Ohio Edison", "STARK":"Ohio Edison",    "WAYNE":"Ohio Edison",
   "TRUMBULL":"Ohio Edison","MAHONING":"Ohio Edison", "COLUMBIANA":"Ohio Edison"
 };
-const STATUS_LABEL = { major:"Major outage", assessing:"No utility ETR", progress:"Restoring (ETR)", restored:"Restored" };
+const STATUS_LABEL = { major:"Major outage", assessing:"No utility ETR", progress:"Utility ETR available", restored:"Restored" };
 const STATUS_COLOR = { major:"#e74c3c", significant:"#ff7a18", progress:"#3498db", restored:"#2ecc71" };
 const KEY = "neo_restoration_v3";
 // small inline confidence tag: high (raw source) · medium (estimate) · experimental (derived/model)
@@ -1430,7 +1430,7 @@ function renderFirstEnergy(){
       const hasTrend = (store.countyHistory[c.name]||[]).length >= 2;
       return `<div class="card card--${st} ${c.out<=0?'clear':''}">
         <h3><span class="nm">${nameHtml(c.name)}</span><span class="pill ${st}">${STATUS_LABEL[st]}</span></h3>
-        <div class="util">${esc(util)}</div>
+        <div class="util">Source: FirstEnergy · ${esc(util)} ${confTag('high')}</div>
         <div class="bar mini"><span style="width:${p}%"></span></div>
         <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
@@ -1561,7 +1561,7 @@ function openDetail(name, focusId){
   document.getElementById("d_title").textContent = titleCase(name) + " County";
   const active = (c.subs||[]).filter(s=>s.out>0);
   document.getElementById("d_sub").textContent =
-    `${NEO[name]||"FirstEnergy"} · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
+    `Source: FirstEnergy · ${NEO[name]||"FirstEnergy"} · High confidence · ${fmt(c.out)} out across ${active.length} of ${c.subs.length} cities/townships · ` +
     `Utility ETR ${etrStr(c.etr)} · ${ratePlain(store.countyHistory[name], c.out, store.peaks[name])}`;
   const subs = sortItems(c.subs||[], "city");
   document.getElementById("d_list").innerHTML = subs.length ? subs.map(s=>{
@@ -1637,10 +1637,11 @@ function outagePopup(name, out, served, etr, key, includeRel){
   return `<b>${esc(name)}</b><br>`+
     `<div class="pp-row"><span>Currently out</span><b>${fmt(out)}</b></div>`+
     `<div class="pp-row"><span>Customers served</span><b>${fmt(served)}</b></div>`+
-    `<div class="pp-row"><span>Restored vs peak</span><b>${pctRestored(key,out)}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
+    `<div class="pp-row"><span>Recovered from peak</span><b>${pctRestored(key,out)}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
     `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>`+
     (includeRel ? `<div class="pp-row"><span>Reliability</span><b>${relLineHtml(key)}</b></div>` : "")+
-    `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(etr))}</b></div>`;
+    `<div class="pp-row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>`+
+    `<div class="pp-row"><span>Source</span><b>FirstEnergy · High confidence</b></div>`;
 }
 
 /* ---------- map + storm playback ---------- */
@@ -1665,7 +1666,7 @@ function buildPlayback(){
 function updatePlayLabel(){
   const lab = document.getElementById("playLabel");
   if(!lab) return;
-  if(playIdx == null && !replay){ lab.textContent = "current"; return; }
+  if(playIdx == null && !replay){ lab.textContent = "Current snapshot"; return; }
   const idx = playIdx == null ? timeline.length - 1 : playIdx;
   const t = timeline[idx];
   const pt = (replay ? replay.history : (store.history||[])).find(p=>p.t===t);
@@ -1963,7 +1964,7 @@ async function loadCauses(){
       const icon = L.divIcon({ className:"", html:`<div class="cause-cluster" style="width:${sz}px;height:${sz}px">${fmt(n)}</div>`, iconSize:[sz,sz] });
       L.marker(loc, { icon }).bindPopup(
         `<b>${fmt(n)} outage${n===1?"":"s"} here</b>`+
-        `<div class="pp-row"><span>Customers affected</span><b>${fmt(cust)}</b></div>`+
+        `<div class="pp-row"><span>Customers out</span><b>${fmt(cust)}</b></div>`+
         `<div class="pp-row"><span>Tip</span><b>Zoom in for causes</b></div>`
       ).addTo(causeLayer);
     } else {
@@ -1973,10 +1974,11 @@ async function loadCauses(){
       const r = 5 + 14*Math.min(1, Math.sqrt(cust)/40);
       L.circleMarker(loc, { radius:r, color:cz.color, weight:1.5, fillColor:cz.color, fillOpacity:0.55 }).bindPopup(
         `<b>${esc(causeText(d.cause) || "Cause being assessed")}</b>`+
-        `<div class="pp-row"><span>Customers affected</span><b>${fmt(cust)}</b></div>`+
+        `<div class="pp-row"><span>Customers out</span><b>${fmt(cust)}</b></div>`+
         (causeText(d.crew_status) ? `<div class="pp-row"><span>Crew status</span><b>${esc(causeText(d.crew_status))}</b></div>` : "")+
-        `<div class="pp-row"><span>Est. restoration</span><b>${esc(etrStr(d.etr))}</b></div>`+
-        (d.start_time ? `<div class="pp-row"><span>Started</span><b>${esc(timeStr(Date.parse(d.start_time)))}</b></div>` : "")
+        `<div class="pp-row"><span>Utility ETR</span><b>${esc(etrStr(d.etr))}</b></div>`+
+        (d.start_time ? `<div class="pp-row"><span>Started</span><b>${esc(timeStr(Date.parse(d.start_time)))}</b></div>` : "")+
+        `<div class="pp-row"><span>Source</span><b>FirstEnergy · live incident</b></div>`
       ).addTo(causeLayer);
     }
   }
@@ -2238,7 +2240,7 @@ function exportData(){
       appCheckedAt: lastCheckedAt ? new Date(lastCheckedAt).toISOString() : null,
       sourceMode: sharedMode ? "shared-snapshot" : "direct-live-fallback",
       schemaVersion: 1,
-      sources: ["FirstEnergy Ohio Storm Center (KUBRA) — customer outage counts", "Cleveland Public Power (City of Cleveland ArcGIS) — approximate feeder/area affected accounts", "poweroutage.us — independent cross-check (when reachable)"],
+      sourcesIncluded: ["FirstEnergy Ohio Storm Center (KUBRA) — customer outage counts", "Cleveland Public Power (City of Cleveland ArcGIS) — approximate feeder/area affected accounts", "poweroutage.us — independent cross-check (when reachable)"],
       cppApproximate: true,                 // CPP = estimated affected accounts, not FE-equivalent customer counts
       derivedAnalyticsIncluded: true,       // reliability/ETR-accuracy/causes are app-derived (experimental)
       pinnedAreaIncluded: false,            // pinned area is local-only and intentionally excluded
@@ -2310,6 +2312,7 @@ function renderMyCity(){
   el.innerHTML = `<div class="panel mycity-card card--${st}" data-county="${esc(countyName)}" role="button" tabindex="0">
     <h3><span class="nm">📍 Pinned area: ${esc(label)} <span class="pill ${st}">${STATUS_LABEL[st]}</span></span>
       <button type="button" class="x" id="unpinBtn" aria-label="Clear pinned area" title="Clear pinned area">×</button></h3>
+    <div class="util">Source: FirstEnergy · ${esc(NEO[countyName]||"FirstEnergy")} ${confTag('high')}</div>
     <div class="row"><span>Currently out</span><b>${fmt(out)} / ${fmt(served)} served</b></div>
     <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
     <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(series)}</b></div>
