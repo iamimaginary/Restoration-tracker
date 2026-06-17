@@ -513,7 +513,10 @@
       <em>algorithmically generated</em> projections from the observed decline — not utility commitments. They're
       marked <span class="algo">⚙ algorithmic · N readings</span>, where N is how many collected readings of that
       area the estimate is based on, so the expectation is explicitly tied to the amount of data behind it. Fewer
-      readings means a rougher estimate.</p>
+      readings means a rougher estimate. <b>Early in an outage</b> (before much current data exists) the estimate is
+      blended with the <em>typical recovery pace of past events</em> — the median time those took to reach 90%
+      recovered — and the tag shows <span class="algo">⚙ algorithmic · N readings + past events</span>; as live
+      readings accumulate it fades to rely on the observed decline alone.</p>
       <p><b>Confidence labels:</b> <span class="conf conf-high">High confidence</span> = raw utility outage counts;
       <span class="conf conf-med">Medium</span> = approximations like CPP affected-accounts;
       <span class="conf conf-exp">Experimental</span> = derived analytics (reliability scores, ETR-accuracy,
@@ -975,6 +978,28 @@ function etaHours(series, out, peak){
 // A change only counts as restoring/rising if it's meaningful vs. how many are out
 // (>= max(5/hr, 1% of current out per hour)); otherwise it's "holding steady",
 // so a plateaued tail never reads as "restoring ~1/hr → hundreds of hours".
+// median "hours from peak to 90% recovered" across archived events — a historical recovery-pace
+// prior. null when we have no completed events with that milestone yet.
+function histT90(){
+  const v = (pastStorms||[]).map(s=>s.to90Hrs).filter(x=>x!=null && x>0).sort((a,b)=>a-b);
+  return v.length ? v[Math.floor(v.length/2)] : null;
+}
+// historical-pace estimate of hours remaining, given how far recovery has progressed.
+// Assumes exponential recovery at the typical past pace (each "decade" of reduction takes ~T90).
+function priorEta(out, peak){
+  const T90 = histT90();
+  if(!T90 || !(peak>0) || out<=0) return null;
+  const f = Math.max(0, Math.min(0.99, (peak-out)/peak));   // fraction recovered so far
+  const rem = T90 * Math.log(100*(1-f)) / Math.LN10;        // hours to ~99% recovered
+  return (rem>0 && isFinite(rem)) ? rem : null;
+}
+// readings observed since this outage's peak (how much current-event data we have)
+function postPeakCount(series){
+  if(!series || !series.length) return 0;
+  let pk=0; for(let i=1;i<series.length;i++) if(series[i].out>=series[pk].out) pk=i;
+  let c=0; for(let i=pk;i<series.length;i++) if(series[i].out>0) c++;
+  return c;
+}
 function rateInfo(series, out, peak){
   const n = series ? series.length : 0;
   if(out <= 0) return { cls:"good", txt:"✓ fully restored" };
@@ -984,21 +1009,35 @@ function rateInfo(series, out, peak){
   const meaningful = Math.abs(ph) >= Math.max(5, out * 0.01);
   if(!meaningful) return { cls:"muted", txt:"↔ holding steady" };
   if(ph > 0){
-    const eta = out / ph;                                  // consistent with the shown rate (re-measured each update)
-    if(eta <= 48) return { cls:"good", txt:`▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)`, algo:true, n };
-    return { cls:"good", txt:`▼ restoring slowly (~${fmt(ph)} restored/hr)`, algo:true, n };
+    let eta = out / ph;                                    // observed (linear from the recent rate)
+    let usedPrior = false;
+    // Blend a historical recovery-pace prior, weighted heavily early (few post-peak readings)
+    // and fading to the observed decline as this outage accrues data. Steadies wild early ETAs.
+    const prior = priorEta(out, peak);
+    if(prior != null){
+      const w = Math.min(1, postPeakCount(series) / 8);    // 0 → all prior, 1 (8+ readings) → all observed
+      eta = w*eta + (1-w)*prior;
+      usedPrior = w < 0.75;
+    }
+    if(eta <= 48) return { cls:"good", txt:`▼ ~${durStr(eta)} to clear (~${fmt(ph)} restored/hr)`, algo:true, n, prior:usedPrior };
+    return { cls:"good", txt:`▼ restoring slowly (~${fmt(ph)} restored/hr)`, algo:true, n, prior:usedPrior };
   }
   return { cls:"bad", txt:`▲ rising (~${fmt(-ph)} added/hr)`, algo:true, n };
 }
-// the restoration rate / time-to-clear is the app's OWN projection, not a utility ETR —
-// label it as algorithmically generated and note how much data it's based on.
+// the restoration rate / time-to-clear is the app's OWN projection, not a utility ETR — label it
+// as algorithmically generated, note how much current-event data it uses, and flag when an early
+// estimate is leaning on past events.
 function algoTag(i){
   if(!i.algo) return "";
-  return ` <span class="algo" title="Algorithmically generated from ${i.n} collected reading${i.n===1?"":"s"} of this area — the app's own projection from the observed decline, not a utility ETR.">⚙ algorithmic · ${i.n} reading${i.n===1?"":"s"}</span>`;
+  const label = `⚙ algorithmic · ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""}`;
+  const title = i.prior
+    ? `Early estimate: blended from this location's ${i.n} reading${i.n===1?"":"s"} AND the typical recovery pace of past events. As more readings arrive it relies on the live decline. The app's own projection, not a utility ETR.`
+    : `Algorithmically generated from ${i.n} collected reading${i.n===1?"":"s"} of this area — the app's own projection from the observed decline, not a utility ETR.`;
+  return ` <span class="algo" title="${title}">${label}</span>`;
 }
 const RATE_COLOR = { good:"var(--good)", bad:"var(--bad)", muted:"var(--muted)" };
 function rateHtml(series, out, peak){ const i = rateInfo(series, out, peak); return `<span style="color:${RATE_COLOR[i.cls]}">${i.txt}</span>${algoTag(i)}`; }
-function ratePlain(series, out, peak){ const i = rateInfo(series, out, peak); return i.txt + (i.algo ? ` (algorithmic est. from ${i.n} reading${i.n===1?"":"s"})` : ""); }
+function ratePlain(series, out, peak){ const i = rateInfo(series, out, peak); return i.txt + (i.algo ? ` (algorithmic est. from ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""})` : ""); }
 
 /* ---------- long-run per-city reliability score ---------- */
 // Built from the persistent reliability aggregates the collector accumulates over
