@@ -1778,52 +1778,149 @@ function renderCausesPanel(){
 }
 
 /* ---------- reusable line chart (dependency-free canvas) ---------- */
-function lineChart(canvas, data, color, emptyMsg){
+function roundRect(ctx,x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function lineChart(canvas, data, color, emptyMsg, opts){
+  opts = opts || {};
   const ctx = canvas.getContext("2d");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth || (canvas.parentElement ? canvas.parentElement.clientWidth : 320) || 320;
   const h = canvas.clientHeight || 200;
   canvas.width = w*dpr; canvas.height = h*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
-  ctx.clearRect(0,0,w,h);
-  const pad = { l:56, r:14, t:12, b:24 };
+  const pad = { l:56, r:14, t:14, b:24 };
   const plotW = w-pad.l-pad.r, plotH = h-pad.t-pad.b;
-  if(!data || data.length < 2){
+  const minPts = opts.bars ? 1 : 2;
+  if(!data || data.length < minPts){
+    ctx.clearRect(0,0,w,h);
     ctx.fillStyle="#93a4b8"; ctx.font="12px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
     ctx.fillText(emptyMsg, w/2, h/2);
+    canvas._chart = null;
     return;
   }
-  const maxV = Math.max(...data.map(d=>d.out), 1);
-  const niceMax = Math.pow(10, Math.floor(Math.log10(maxV)));
-  const top = Math.ceil(maxV/niceMax)*niceMax || 1;
-  ctx.strokeStyle="#2a3a4d"; ctx.fillStyle="#93a4b8"; ctx.font="11px sans-serif"; ctx.textAlign="right"; ctx.textBaseline="middle";
-  for(let i=0;i<=4;i++){ const y=pad.t+plotH*i/4; ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(w-pad.r,y); ctx.stroke(); ctx.fillText(Math.round(top*(1-i/4)).toLocaleString(), pad.l-8, y); }
-  const x = i => pad.l + plotW*i/(data.length-1);
-  const y = v => pad.t + plotH*(1 - v/top);
-  ctx.beginPath(); ctx.moveTo(x(0), y(data[0].out)); data.forEach((d,i)=>ctx.lineTo(x(i), y(d.out)));
-  ctx.lineTo(x(data.length-1), pad.t+plotH); ctx.lineTo(x(0), pad.t+plotH); ctx.closePath();
-  const g = ctx.createLinearGradient(0,pad.t,0,pad.t+plotH);
-  g.addColorStop(0,color.fill); g.addColorStop(1,color.fill0); ctx.fillStyle=g; ctx.fill();
-  ctx.beginPath(); data.forEach((d,i)=> i?ctx.lineTo(x(i),y(d.out)):ctx.moveTo(x(i),y(d.out))); ctx.strokeStyle=color.line; ctx.lineWidth=2.4; ctx.stroke();
-  ctx.fillStyle=color.dot; data.forEach((d,i)=>{ ctx.beginPath(); ctx.arc(x(i),y(d.out),2.3,0,Math.PI*2); ctx.fill(); });
-  ctx.fillStyle="#93a4b8"; ctx.textAlign="center"; ctx.textBaseline="top";
-  const step = Math.ceil(data.length/6);
-  data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText(new Date(d.t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}), x(i), pad.t+plotH+6); } });
+  const vals = data.map(d=>d.out);
+  let top, bottom;
+  if(opts.yMode === "zoom"){                       // fit the data range (e.g. availability near 100%)
+    const mn = Math.min(...vals), mx = Math.max(...vals);
+    const padv = Math.max((mx-mn)*0.25, opts.minPad || 0);
+    bottom = (opts.absMin!=null) ? Math.max(opts.absMin, mn-padv) : (mn-padv);
+    top    = (opts.absMax!=null) ? Math.min(opts.absMax, mx+padv) : (mx+padv);
+    if(top <= bottom) top = bottom + 1;
+  } else {                                         // 0-based with a "nice" max (default)
+    bottom = 0;
+    const maxV = Math.max(...vals, 1);
+    const niceMax = Math.pow(10, Math.floor(Math.log10(maxV)));
+    top = Math.ceil(maxV/niceMax)*niceMax || 1;
+  }
+  const yFmt = opts.yFmt || (v=>Math.round(v).toLocaleString());
+  const xFmtAxis = opts.xFmt || (t=>new Date(t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}));
+  const barW = opts.bars ? Math.max(3, Math.min(34, plotW/Math.max(1,data.length)*0.7)) : 0;
+  const inset = opts.bars ? barW/2 + 4 : 0;          // keep first/last bars off the axis edges
+  const x = i => pad.l + inset + (plotW-2*inset) * (data.length>1 ? i/(data.length-1) : 0.5);
+  const y = v => pad.t + plotH*(1 - (v-bottom)/(top-bottom));
+  const tToX = t => {                              // timestamp -> x (interpolated over data points)
+    if(t<=data[0].t) return x(0);
+    if(t>=data[data.length-1].t) return x(data.length-1);
+    for(let i=0;i<data.length-1;i++){ const a=data[i].t,b=data[i+1].t; if(t>=a&&t<=b) return x(i)+(x(i+1)-x(i))*((t-a)/((b-a)||1)); }
+    return x(data.length-1);
+  };
+  const bands = (opts.bands||[]).map(bd=>({ from:Math.max(bd.from,data[0].t), to:Math.min(bd.to,data[data.length-1].t), sev:bd.sev, label:bd.label }))
+    .filter(bd=>bd.to>bd.from);
+  const bandColor = sev => /severe|extreme/i.test(sev||"") ? "rgba(231,76,60,0.14)" : /moderate/i.test(sev||"") ? "rgba(241,196,15,0.12)" : "rgba(148,163,184,0.10)";
+
+  function paint(){
+    ctx.clearRect(0,0,w,h);
+    bands.forEach(bd=>{ const xa=tToX(bd.from), xb=tToX(bd.to); ctx.fillStyle=bandColor(bd.sev); ctx.fillRect(xa, pad.t, Math.max(1,xb-xa), plotH); });
+    ctx.strokeStyle="#2a3a4d"; ctx.fillStyle="#93a4b8"; ctx.font="11px sans-serif"; ctx.textAlign="right"; ctx.textBaseline="middle";
+    for(let i=0;i<=4;i++){ const yy=pad.t+plotH*i/4; ctx.beginPath(); ctx.moveTo(pad.l,yy); ctx.lineTo(w-pad.r,yy); ctx.stroke(); ctx.fillText(yFmt(top-(top-bottom)*i/4), pad.l-8, yy); }
+    if(opts.bars){
+      data.forEach((d,i)=>{ const cx=x(i), yy=y(d.out);
+        ctx.fillStyle = (opts.stormDays && d.day && opts.stormDays.has(d.day)) ? "#ff7a18" : color.line;
+        ctx.fillRect(cx-barW/2, yy, barW, (pad.t+plotH)-yy); });
+    } else {
+      ctx.beginPath(); ctx.moveTo(x(0), y(data[0].out)); data.forEach((d,i)=>ctx.lineTo(x(i), y(d.out)));
+      ctx.lineTo(x(data.length-1), pad.t+plotH); ctx.lineTo(x(0), pad.t+plotH); ctx.closePath();
+      const g=ctx.createLinearGradient(0,pad.t,0,pad.t+plotH); g.addColorStop(0,color.fill); g.addColorStop(1,color.fill0); ctx.fillStyle=g; ctx.fill();
+      ctx.beginPath(); data.forEach((d,i)=> i?ctx.lineTo(x(i),y(d.out)):ctx.moveTo(x(i),y(d.out))); ctx.strokeStyle=color.line; ctx.lineWidth=2.4; ctx.stroke();
+      ctx.fillStyle=color.dot; data.forEach((d,i)=>{ ctx.beginPath(); ctx.arc(x(i),y(d.out),2.3,0,Math.PI*2); ctx.fill(); });
+    }
+    if(opts.peak && data.length>1){
+      let pi=0; for(let i=1;i<data.length;i++) if(data[i].out>data[pi].out) pi=i;
+      const cx=x(pi), cy=y(data[pi].out);
+      ctx.fillStyle="#fff"; ctx.strokeStyle=color.line; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cx,cy,3.6,0,Math.PI*2); ctx.fill(); ctx.stroke();
+      ctx.font="bold 11px sans-serif"; ctx.textBaseline="bottom"; ctx.fillStyle="#ffd9b0";
+      ctx.textAlign = cx > w-96 ? "right" : "left"; ctx.fillText("▲ peak "+yFmt(data[pi].out), cx + (cx>w-96?-6:6), cy-5);
+    }
+    ctx.fillStyle="#93a4b8"; ctx.font="11px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="top";
+    const step=Math.max(1,Math.ceil(data.length/6));
+    data.forEach((d,i)=>{ if(i%step===0 || i===data.length-1){ ctx.fillText(xFmtAxis(d.t), x(i), pad.t+plotH+6); } });
+  }
+  paint();
+  canvas._paint = paint;
+  canvas._chart = { data, x, y, pad, plotW, plotH, w, h, yFmt, color,
+    xFmtTip: opts.xFmtTip || xFmtAxis, valueLabel: opts.valueLabel || "",
+    bandAt: t => { const b = bands.find(bd=> t>=bd.from && t<=bd.to); return b ? b.label : null; } };
+  if(opts.tooltip) attachChartHover(canvas);
+}
+// crosshair + tooltip on hover/tap (bound once per canvas; reads the latest _chart each move)
+function attachChartHover(canvas){
+  if(canvas._hoverBound) return; canvas._hoverBound = true;
+  const ctx = canvas.getContext("2d");
+  const show = ev => {
+    const c = canvas._chart; if(!c || !canvas._paint) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = (ev.clientX!=null?ev.clientX:(ev.touches&&ev.touches[0]&&ev.touches[0].clientX)) - rect.left;
+    if(mx==null || isNaN(mx)) return;
+    if(mx < c.pad.l-6 || mx > c.w-14+6){ canvas._paint(); return; }
+    let i = c.data.length>1 ? Math.round((mx-c.pad.l)/c.plotW*(c.data.length-1)) : 0;
+    i = Math.max(0, Math.min(c.data.length-1, i));
+    const d=c.data[i], px=c.x(i), py=c.y(d.out);
+    canvas._paint();
+    ctx.strokeStyle="rgba(255,255,255,.30)"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(px,c.pad.t); ctx.lineTo(px,c.pad.t+c.plotH); ctx.stroke();
+    ctx.fillStyle="#fff"; ctx.strokeStyle=c.color.line; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fill(); ctx.stroke();
+    const lines=[ c.yFmt(d.out)+(c.valueLabel?(" "+c.valueLabel):""), c.xFmtTip(d.t) ];
+    const alert=c.bandAt(d.t); if(alert) lines.push("⛈ "+alert);
+    ctx.font="12px sans-serif";
+    const tw = Math.max(...lines.map(s=>ctx.measureText(s).width)) + 16;
+    const th = lines.length*16 + 10;
+    let bx = px+12; if(bx+tw > c.w-2) bx = px-12-tw; bx=Math.max(2,bx);
+    let by = Math.max(2, py-th-10); if(by < c.pad.t) by = Math.min(c.pad.t+c.plotH-th, py+12);
+    ctx.fillStyle="rgba(13,18,26,.95)"; ctx.strokeStyle="#2a3a4d"; ctx.lineWidth=1; roundRect(ctx,bx,by,tw,th,6); ctx.fill(); ctx.stroke();
+    ctx.textAlign="left"; ctx.textBaseline="top";
+    lines.forEach((s,k)=>{ ctx.fillStyle = k===0?"#fff":"#aebccd"; ctx.font = (k===0?"bold ":"")+"12px sans-serif"; ctx.fillText(s, bx+8, by+6+k*16); });
+  };
+  const clear=()=>{ if(canvas._paint) canvas._paint(); };
+  canvas.addEventListener("pointermove", show);
+  canvas.addEventListener("pointerdown", show);
+  canvas.addEventListener("pointerleave", clear);
+  canvas.addEventListener("pointercancel", clear);
 }
 const ORANGE = {fill:"rgba(255,122,24,.35)", fill0:"rgba(255,122,24,0)", line:"#ff7a18", dot:"#ffb347"};
 const BLUE   = {fill:"rgba(52,152,219,.32)", fill0:"rgba(52,152,219,0)", line:"#3498db", dot:"#7fc4ec"};
 
 function drawChart(){
   const data = store.history;
-  document.getElementById("trendNote").textContent = data.length<2 ? "building from live snapshots…" : data.length+" snapshots";
+  const bands = (weatherLog||[]).map(e=>{ const from=Date.parse(e.onset)||e.firstSeen, to=Date.parse(e.ends)||e.lastSeen||Date.now(); return {from,to,sev:e.severity,label:e.event}; })
+    .filter(b=>b.from && b.to && b.to>b.from);
+  const note = document.getElementById("trendNote");
+  if(note) note.textContent = data.length<2 ? "building from live snapshots…" : (data.length+" snapshots" + (bands.length?" · shaded = active weather alerts":""));
   lineChart(document.getElementById("trendChart"), data, ORANGE,
-    "Collecting live snapshots — the trend line appears after a couple of updates.");
+    "Collecting live snapshots — the trend line appears after a couple of updates.",
+    { tooltip:true, peak:true, bands, valueLabel:"customers out" });
 }
 function drawRelTrend(){
   const cv = document.getElementById("relTrendChart"); if(!cv) return;
   const note = document.getElementById("relTrendNote");
-  const data = (relTrend||[]).map(d => ({ t: Date.parse(d.day+"T12:00:00Z"), out: d.availPct }));
-  if(note) note.textContent = data.length < 2 ? "daily NE Ohio availability — builds over days" : data.length+" days";
-  lineChart(cv, data, BLUE, "Daily availability appears here after a couple of days of data.");
+  const data = (relTrend||[]).map(d => ({ t: Date.parse(d.day+"T12:00:00Z"), out: d.availPct, day: d.day }));
+  const dayStr = ms => new Date(ms).toISOString().slice(0,10);
+  const stormDays = new Set();   // highlight days overlapping a logged storm or severe weather
+  (pastStorms||[]).forEach(s=>{ if(s.startedAt&&s.endedAt) for(let t=s.startedAt;t<=s.endedAt;t+=864e5) stormDays.add(dayStr(t)); });
+  (weatherLog||[]).forEach(e=>{ if(/severe|extreme/i.test(e.severity||"")){ const a=Date.parse(e.onset)||e.firstSeen, b=Date.parse(e.ends)||e.lastSeen||a; if(a) for(let t=a;t<=b;t+=864e5) stormDays.add(dayStr(t)); } });
+  if(note) note.textContent = data.length < 2 ? "daily NE Ohio availability — builds over days"
+    : (data.length+" days" + ([...stormDays].some(d=>data.find(x=>x.day===d)) ? " · orange = storm day" : ""));
+  lineChart(cv, data, BLUE, "Daily availability appears here after a couple of days of data.",
+    { tooltip:true, bars:true, yMode:"zoom", absMax:100, minPad:0.4, stormDays,
+      yFmt:v=>v.toFixed(2)+"%", valueLabel:"uptime",
+      xFmt:t=>new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
+      xFmtTip:t=>new Date(t).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) });
 }
 function drawCountyChart(name){
   lineChart(document.getElementById("d_chart"), store.countyHistory[name] || [], BLUE,

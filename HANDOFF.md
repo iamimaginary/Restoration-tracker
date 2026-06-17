@@ -164,7 +164,13 @@ refresh, auto-refresh, sort, "show all FE counties", export.
   stored snapshots; "Live" resets). Search drops a pin with full stats. **"show causes" toggle** overlays
   FirstEnergy's individual incidents (cause/crew/ETR) for the current viewport, loaded live client-side from
   Kübra cluster tiles (`renderCauses`/`loadCauses`, `causeLayer`); zoom drives cluster→incident resolution.
-- **Trends**: NE Ohio outage trend chart + daily **reliability trend** (availability/day).
+- **Trends**: NE Ohio outage trend chart (area + **peak marker** + translucent **weather-alert bands** from
+  `weatherLog`, severity-colored) and daily **reliability trend** (bars on a **zoomed** availability axis so
+  near-100% differences are visible; **storm days** highlighted orange via pastStorms/severe-weather overlap).
+  Both charts have **hover/tap crosshair tooltips** (exact value + time + any active alert). The shared
+  `lineChart(canvas,data,color,emptyMsg,opts)` engine takes opts `{tooltip,peak,bands,bars,yMode:'zoom',
+  absMax,minPad,stormDays,yFmt,xFmt,xFmtTip,valueLabel}`; default (no opts) preserves the simple area chart
+  used by the county drill-down / CPP / sparkline. `attachChartHover()` binds once and reads `canvas._chart`.
 - **Reliability** (gated ~3 days of data, then keeps averaging): **utility comparison** (Ohio Edison vs
   Illuminating, customer-weighted availability); **City reliability** (availability grade A+–F = ASAI-style
   `1 − Σ(out·dt)/Σ(served·dt)`, outage frequency, interruptions/avg duration = SAIFI/CAIDI-ish, "blue-sky"
