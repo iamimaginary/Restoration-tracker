@@ -509,10 +509,24 @@ function loadPrev(){
     }
   }
 
+  // backfill recoverable fields onto older storm-log entries (e.g. ones archived before these
+  // fields existed). Customer-hours / curve / causes can't be reconstructed, but the day's max
+  // gust (Open-Meteo, ~14d back) and overlapping weather alerts often still can be.
+  const sevRank = { Extreme:4, Severe:3, Moderate:2, Minor:1 };
+  stormLog.forEach(s => {
+    if(s.maxGustMph == null){
+      let g = 0;
+      for(let t=s.startedAt; t<=s.endedAt+864e5; t+=864e5){ const w = wind[new Date(t).toISOString().slice(0,10)]; if(w && w.gust>g) g = w.gust; }
+      if(g) s.maxGustMph = Math.round(g);
+    }
+    if(!s.weatherEvents){
+      const ev = [...new Set((weatherLog||[]).filter(e=>{ const a=Date.parse(e.onset)||e.firstSeen, b=Date.parse(e.ends)||e.lastSeen||a; return a && a<=s.endedAt && b>=s.startedAt; })
+        .sort((x,y)=>(sevRank[y.severity]||0)-(sevRank[x.severity]||0)).map(e=>e.event))].slice(0,5);
+      if(ev.length) s.weatherEvents = ev;
+    }
+  });
+
   const state = {
-    schema: 1, collectedAt: now,
-    activeStorm, belowSince, stormLog,
-    fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
     peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
