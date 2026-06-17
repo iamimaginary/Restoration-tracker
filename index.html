@@ -2164,6 +2164,7 @@ const TABS = ["now","map","trends","reliability","storms","about"];
 let tabReady = false;   // suppress scroll on the initial (programmatic) tab show
 function showTab(name){
   if(!TABS.includes(name)) name = "now";
+  const y = window.scrollY;   // preserve scroll position so switching tabs never jumps the page
   document.querySelectorAll(".tab").forEach(s => s.classList.toggle("on", s.id === "tab-"+name));
   document.querySelectorAll("#tabs button").forEach(b => {
     const on = b.dataset.tab === name;
@@ -2172,12 +2173,10 @@ function showTab(name){
   if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); if(causeOn) scheduleCauses(); } }, 30);
   if(name === "trends") setTimeout(()=>{ drawChart(); drawRelTrend(); }, 0);
   if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
-  // scroll to the top of the tab bar (not the page) so the new tab starts cleanly
-  // under the sticky nav. Skipped on the initial load so we don't bury the header.
-  if(tabReady){
-    const t = document.getElementById("tabs");
-    if(t){ const top = t.getBoundingClientRect().top; if(top > 4) window.scrollTo(0, window.scrollY + top - 1); }
-  }
+  // keep the viewport exactly where it was — no scroll-to-top, no dip to re-pin the tab bar
+  // (the tab bar is sticky, so it stays visible regardless). Restore guards against any
+  // reflow from the content swap; scrollTo clamps if the new tab is shorter.
+  window.scrollTo(0, y);
 }
 
 /* ---------- wire up ---------- */
