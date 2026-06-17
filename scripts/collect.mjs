@@ -537,6 +537,9 @@ function loadPrev(){
   });
 
   const state = {
+    schema: 1, collectedAt: now,
+    activeStorm, belowSince, stormLog,
+    fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
     peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
@@ -545,7 +548,6 @@ function loadPrev(){
   };
   mkdirSync("data", { recursive: true });
   writeFileSync(STATE_PATH, JSON.stringify(state));
-  const cvg = causes && causes.totalCust > 0 ? Math.round(causes.knownCust / causes.totalCust * 100) : 0;
   console.log(`ok neoOut=${neoOut} cppOut=${cppOut} total=${totalAll} active=${!!activeStorm} closed=${closed} logged=${stormLog.length}`
-    + (causes ? ` causes=${causes.incidents}inc/${causes.fetches}fetch/${cvg}%cover` : " causes=none"));
+    + (causes ? ` causes=${causes.incidents}inc/${causes.fetches}fetch` : " causes=none"));
 })();
