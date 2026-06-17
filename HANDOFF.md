@@ -113,8 +113,11 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
 ```
 {
   schema, collectedAt,
-  activeStorm:{startedAt}|null, belowSince|null,
-  stormLog:[{startedAt,endedAt,durationHrs,peakTotal,peakAt,topCounties:[{name,peak}]}],
+  activeStorm:{startedAt, peak, peakAt, nOutPeak, peakCauses}|null, belowSince|null,  // running worst-moment context
+  stormLog:[{ startedAt,endedAt,durationHrs,peakTotal,peakAt,topCounties:[{name,peak}],
+              custHrsLost, toHalfHrs, to90Hrs,         // total impact + restoration milestones (hrs from peak)
+              peakCPP, nOutPeak, maxGustMph,           // CPP peak, peak incident count, max observed gust
+              weatherEvents:[...], causes:{raw:{cust,n}}, curve:[{t,out}] }],   // alerts, peak cause mix, ~48-pt thumbnail
   fe:{ updatedAt, counties:[{name,out,served,etr,loc:[lat,lng],subs:[{id,name,out,served,etr,loc}]}] },
   cpp:{ updatedAt, accounts, feeders:[...], features:[geojson] },
   peaks:{ "<COUNTY or areaId>": peak },  cppPeak,
@@ -186,7 +189,12 @@ refresh, auto-refresh, sort, "show all FE counties", export.
   positive "▲ beat estimate N×" / "▲ moved up N×"]; sorted & headlined by push-backs; tap a county → its
   cities). Page helpers `etrSlips()`/`etrLiveSlips()` fall back to the undirected `etrChanges` for records
   predating direction tracking.
-- **Storms**: auto storm log (archived events) + per-storm **Share** (copies summary + `#storms` link).
+- **Storms**: auto storm log — each archived event shows peak out, **customer-hours lost**, peak incident count,
+  **max wind gust**, CPP peak, duration, **restoration milestones** (time to 50%/90% restored), hardest-hit
+  counties, **likely causes** (categorized peak cause mix), overlapping **weather alerts**, and a **mini outage
+  curve** (`s.curve`, drawn via `lineChart` with peak marker + tooltip). Per-storm **Share** copies a summary
+  (now incl. customer-hours, gust, causes) + `#storms` link. `renderStormLog()` guards every field (old entries
+  lacking them still render). Worst-moment fields (nOutPeak/peakCauses) accumulate live on `activeStorm`.
 - **About**: how-it-works, weather/blue-sky, privacy, open-data link (`tracker-data/state.json`),
   report numbers, trademark/attribution.
 

@@ -61,6 +61,15 @@ const REL_DT_CAP_MS = 30 * 60 * 1000;               // cap per-reading time weig
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// evenly downsample a {t,out} series to ~n points (always keeping the peak) for a stored storm thumbnail
+function downsample(series, n){
+  if(!series || series.length <= n) return (series||[]).map(p=>({ t:p.t, out:p.out }));
+  const out = [], step = (series.length-1)/(n-1);
+  for(let i=0;i<n;i++){ const p = series[Math.round(i*step)]; out.push({ t:p.t, out:p.out }); }
+  let pk = series[0]; for(const p of series) if(p.out > pk.out) pk = p;
+  if(!out.some(p=>p.t===pk.t)){ out.push({ t:pk.t, out:pk.out }); out.sort((a,b)=>a.t-b.t); }
+  return out;
+}
 
 // Look like a browser and retry — FirstEnergy's CDN (KUBRA) intermittently 403s
 // requests from datacenter IPs / non-browser clients.
@@ -450,10 +459,31 @@ function loadPrev(){
             .filter(([k]) => NEO.has(k))
             .map(([name, peak]) => ({ name, peak }))
             .sort((a,b)=> b.peak - a.peak).slice(0,3);
+          // total customer-hours lost (NE Ohio), dt-capped to ignore collection gaps
+          let custHrsLost = 0;
+          for(let i=1;i<history.length;i++){ const dt = Math.min(history[i].t-history[i-1].t, REL_DT_CAP_MS)/3600000; custHrsLost += history[i-1].out * dt; }
+          // restoration milestones: hours from peak until out fell to 50% / 10% (= 90% restored)
+          const afterPeak = history.filter(p=>p.t >= peakPt.t);
+          const milestone = frac => { const hit = afterPeak.find(p=>p.out <= peakTotal*frac); return hit ? Math.round((hit.t-peakPt.t)/360000)/10 : null; };
+          // weather alerts overlapping the storm window, worst-severity first
+          const sevRank = { Extreme:4, Severe:3, Moderate:2, Minor:1 };
+          const wEvents = [...new Set((weatherLog||[]).filter(e=>{ const a=Date.parse(e.onset)||e.firstSeen, b=Date.parse(e.ends)||e.lastSeen||a; return a && a<=belowSince && b>=activeStorm.startedAt; })
+            .sort((x,y)=>(sevRank[y.severity]||0)-(sevRank[x.severity]||0)).map(e=>e.event))].slice(0,5);
+          // max observed gust over the storm's days
+          let maxGust = 0;
+          for(let t=activeStorm.startedAt; t<=belowSince+864e5; t+=864e5){ const w = wind[new Date(t).toISOString().slice(0,10)]; if(w && w.gust>maxGust) maxGust = w.gust; }
           stormLog.unshift({
             startedAt: activeStorm.startedAt, endedAt: belowSince,
             durationHrs: Math.round((belowSince - activeStorm.startedAt) / 3600000 * 10) / 10,
-            peakTotal, peakAt: peakPt.t, topCounties
+            peakTotal, peakAt: peakPt.t, topCounties,
+            custHrsLost: Math.round(custHrsLost),
+            toHalfHrs: milestone(0.5), to90Hrs: milestone(0.10),
+            peakCPP: cppPeak || 0,
+            nOutPeak: activeStorm.nOutPeak || 0,
+            maxGustMph: maxGust ? Math.round(maxGust) : null,
+            weatherEvents: wEvents,
+            causes: activeStorm.peakCauses || null,        // cause mix at the worst moment
+            curve: downsample(history, 48)                 // thumbnail of the outage curve
           });
           while(stormLog.length > 50) stormLog.pop();
         }
@@ -465,6 +495,17 @@ function loadPrev(){
       }
     } else {
       belowSince = null;
+    }
+  }
+
+  // accumulate live storm context (worst-moment incident count + cause mix) for the storm log
+  if(activeStorm){
+    activeStorm.nOutPeak = Math.max(activeStorm.nOutPeak || 0, fe.official.nOut || 0);
+    if(totalAll >= (activeStorm.peak || 0)){
+      activeStorm.peak = totalAll; activeStorm.peakAt = now;
+      if(causes && causes.byCause && causes.knownCust > 0){
+        activeStorm.peakCauses = Object.fromEntries(Object.entries(causes.byCause).sort((a,b)=>(b[1].cust||0)-(a[1].cust||0)).slice(0,6));
+      }
     }
   }
 

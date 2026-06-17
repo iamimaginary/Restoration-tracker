@@ -120,11 +120,15 @@
   .mv-name small { color:var(--muted); font-size:10.5px; }
   .mv-empty { color:var(--muted); font-size:12px; padding:4px 0; }
   @media (max-width:560px){ .movers { grid-template-columns:1fr; gap:14px; } }
-  .sl-row { padding:9px 0; border-top:1px solid var(--line-soft); }
+  .sl-row { padding:14px 0; border-top:1px solid var(--line-soft); }
   .sl-row:first-of-type { border-top:none; }
   .sl-when { font-weight:600; font-size:13.5px; }
-  .sl-meta { font-size:12px; color:var(--muted); margin-top:2px; }
+  .sl-meta { font-size:12px; color:var(--muted); margin-top:4px; }
   .sl-meta b { color:var(--text); }
+  .sl-stats { display:flex; flex-wrap:wrap; gap:7px; margin:8px 0 2px; }
+  .sl-stats span { background:var(--bg); border:1px solid var(--line-soft); border-radius:999px; padding:4px 10px; font-size:11.5px; color:var(--muted); }
+  .sl-stats span b { color:var(--text); font-weight:700; }
+  .sl-curve { width:100%; height:96px; display:block; margin-top:10px; }
   .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   .stat .note { font-size:11px; color:var(--muted); margin-top:5px; line-height:1.35; }
   :focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
@@ -1156,18 +1160,56 @@ function renderStormLog(){
   if(emptyEl) emptyEl.style.display = "none";
   el.innerHTML = `<div class="panel">
     <h3>Storm log <small>completed events, auto-archived as each one is restored</small></h3>
-    ${pastStorms.map((s,i)=>`<div class="sl-row">
-      <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}
-        <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
-      <div class="sl-meta">peak <b>${fmt(s.peakTotal)}</b> customers out · lasted ~${esc(durStr(s.durationHrs||0))}` +
-        `${(s.topCounties&&s.topCounties.length)?` · hardest hit: ${s.topCounties.map(c=>esc(titleCase(c.name))).join(", ")}`:""}</div>
-    </div>`).join("")}
+    ${pastStorms.map((s,i)=>{
+      const chips = [];
+      chips.push(`peak <b>${fmt(s.peakTotal)}</b> out`);
+      if(s.custHrsLost) chips.push(`<b>${fmt(s.custHrsLost)}</b> customer-hrs lost`);
+      if(s.nOutPeak) chips.push(`<b>${fmt(s.nOutPeak)}</b> peak incidents`);
+      if(s.maxGustMph) chips.push(`gusts to <b>${s.maxGustMph} mph</b>`);
+      if(s.peakCPP) chips.push(`CPP peak <b>~${fmt(s.peakCPP)}</b>`);
+      const restore = [];
+      if(s.toHalfHrs!=null) restore.push(`50% restored in <b>${esc(durStr(s.toHalfHrs))}</b>`);
+      if(s.to90Hrs!=null) restore.push(`90% in <b>${esc(durStr(s.to90Hrs))}</b>`);
+      const hit = (s.topCounties&&s.topCounties.length) ? `hardest hit: <b>${s.topCounties.map(c=>esc(titleCase(c.name))).join(", ")}</b>` : "";
+      const cz = stormCausesText(s);
+      const wx = (s.weatherEvents&&s.weatherEvents.length) ? `weather: ${s.weatherEvents.map(esc).join(", ")}` : "";
+      const line2 = [hit, cz?`likely causes: <b>${esc(cz)}</b>`:"", wx].filter(Boolean).join(" · ");
+      return `<div class="sl-row">
+        <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}
+          <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
+        <div class="sl-stats">${chips.map(c=>`<span>${c}</span>`).join("")}</div>
+        <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${restore.length?` · ${restore.join(" · ")}`:""}</div>
+        ${line2?`<div class="sl-meta">${line2}</div>`:""}
+        ${(s.curve&&s.curve.length>=2)?`<canvas class="sl-curve" data-i="${i}" title="customers out over the storm"></canvas>`:""}
+      </div>`;
+    }).join("")}
   </div>`;
+  requestAnimationFrame(()=>{
+    document.querySelectorAll("#stormlog canvas.sl-curve").forEach(cv=>{
+      const s = pastStorms[+cv.dataset.i];
+      if(s && s.curve && s.curve.length>=2) lineChart(cv, s.curve, ORANGE, "", { peak:true, valueLabel:"customers out", tooltip:true,
+        xFmt: t=>{ const d=new Date(t), h=d.getHours(); return (d.getMonth()+1)+"/"+d.getDate()+" "+((h%12)||12)+(h<12?"a":"p"); },
+        xFmtTip: t=>new Date(t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) });
+    });
+  });
+}
+// categorize a stored storm's peak cause mix into a short label list ("Trees, Equipment")
+function stormCausesText(s){
+  if(!s.causes) return "";
+  const agg = {};
+  for(const [raw,v] of Object.entries(s.causes)){ const cat=causeCat(raw); agg[cat.label]=(agg[cat.label]||0)+((v&&v.cust)||0); }
+  return Object.entries(agg).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([l])=>l).join(", ");
 }
 function shareStorm(i){
   const s = pastStorms[i]; if(!s) return;
   const hit = (s.topCounties||[]).map(c=>titleCase(c.name)).join(", ");
-  const text = `NE Ohio power outage — ${timeStr(s.startedAt)} to ${timeStr(s.endedAt)}: peaked at ${fmt(s.peakTotal)} customers out, lasted ~${durStr(s.durationHrs||0)}${hit?`, hardest hit ${hit}`:""}. ${location.origin}${location.pathname}#storms`;
+  const cz = stormCausesText(s);
+  const extra = [
+    s.custHrsLost ? `~${fmt(s.custHrsLost)} customer-hours lost` : "",
+    s.maxGustMph ? `gusts to ${s.maxGustMph} mph` : "",
+    cz ? `mostly ${cz.toLowerCase()}` : ""
+  ].filter(Boolean).join(", ");
+  const text = `NE Ohio power outage — ${timeStr(s.startedAt)} to ${timeStr(s.endedAt)}: peaked at ${fmt(s.peakTotal)} customers out, lasted ~${durStr(s.durationHrs||0)}${hit?`, hardest hit ${hit}`:""}${extra?`. ${extra}`:""}. ${location.origin}${location.pathname}#storms`;
   const done = btn => { if(btn){ const o=btn.textContent; btn.textContent="Copied!"; setTimeout(()=>btn.textContent=o, 1500); } };
   const btn = document.querySelector(`#stormlog [data-storm="${i}"]`);
   if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(()=>done(btn)).catch(()=>{}); }
