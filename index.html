@@ -189,10 +189,11 @@
   .datahealth .dh-fresh { color:var(--good); }
   .datahealth .dh-stale { color:var(--warn); }
   .datahealth .dh-vstale { color:var(--bad); }
-  .datahealth .dh-items { display:flex; flex-wrap:wrap; gap:2px 16px; margin-top:4px; }
-  .datahealth .dh-item { white-space:nowrap; }       /* keep each label + value on one line */
-  .datahealth .dh-item b { color:var(--text); font-weight:600; }
-  .datahealth .dh-foot { margin-top:5px; opacity:.85; }
+  /* grid: one clean column on mobile, 2-up on wider screens — never ragged */
+  .datahealth .dh-items { display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:3px 16px; margin-top:5px; }
+  .datahealth .dh-item { display:flex; justify-content:space-between; gap:8px; min-width:0; }
+  .datahealth .dh-item b { color:var(--text); font-weight:600; white-space:nowrap; }
+  .datahealth .dh-foot { margin-top:6px; opacity:.85; }
   /* confidence tags */
   .conf { display:inline-block; font-size:9.5px; font-weight:700; letter-spacing:.3px; text-transform:uppercase;
     padding:1px 6px; border-radius:6px; border:1px solid; vertical-align:middle; white-space:nowrap; }
