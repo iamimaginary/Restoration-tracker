@@ -538,7 +538,7 @@
       outage and its worst severity seen. It's built only from collected snapshots, so it's unstable early (reflecting
       whatever events fell in the window) and stabilizes over weeks.</p>
       <p><b>ETR accuracy (experimental):</b> For completed outages we compare each utility ETR against when power
-      actually came back — "met" if restored by the promised time — and count how often the estimate was pushed back.
+      actually came back — "met" if restored by the promised time — and count how often the estimate was moved later.
       Completed-event accuracy and current-outage ETR churn are shown together per county but labeled distinctly.
       Cause classification on the Map and "Why the power's out" buckets FirstEnergy's reported incident causes and is
       likewise experimental and FirstEnergy-only.</p>
@@ -1104,9 +1104,9 @@ function etrLiveTxt(e){
   if(!e._epActive) return "";
   const parts = [];
   const s = etrLiveSlips(e), p = e._epPullIns || 0;
-  if(s > 0) parts.push(`<b style="color:var(--warn)">↻ ETR pushed back ${s}×</b>`);
-  if(p > 0) parts.push(`<b style="color:var(--good)">▲ moved up ${p}×</b>`);
-  return parts.length ? ` · <span title="Counts utility ETR revisions since this location last had power. It tracks this location's continuous outage — not the app's outage-event windows — so it can stay high across a new event if power never came back here.">${parts.join(" · ")} since power was lost here</span>` : "";
+  if(s > 0) parts.push(`<b style="color:var(--warn)">↻ utility ETR moved later ${s}×</b>`);
+  if(p > 0) parts.push(`<b style="color:var(--good)">▲ moved earlier ${p}×</b>`);
+  return parts.length ? ` · <span title="Counts utility ETR revisions since this location last had power. It tracks this location's continuous outage — not the app's outage-event windows — so it can stay high across a new event if power never came back here.">${parts.join(" · ")} since outage began</span>` : "";
 }
 // compact per-city reliability line for the drill-down
 function etrSuffix(id){
@@ -1116,7 +1116,7 @@ function etrSuffix(id){
   if(!e.promises) return live;
   const pctv = Math.round(e.met / e.promises * 100);
   const slips = etrSlips(e);
-  const rev = slips ? ` · ${(slips/e.promises).toFixed(1)} push-backs/outage` : "";
+  const rev = slips ? ` · ${(slips/e.promises).toFixed(1)}× moved later/outage` : "";
   return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>${rev}${live}`;
 }
 function relLineHtml(id){
@@ -1370,7 +1370,7 @@ function renderEtr(){
     const metTxt = e.promises ? `${e.met}/${e.promises} ETRs met` : "outage in progress";
     const lateTxt = e.missed ? ` · avg ${(e.sumOverrunHrs/e.missed).toFixed(1)}h late` : "";
     const slips = etrSlips(e);
-    const slipTxt = slips ? ` · ${(slips/e.promises).toFixed(1)} push-backs/outage` : "";
+    const slipTxt = slips ? ` · ${(slips/e.promises).toFixed(1)}× moved later/outage` : "";
     const pullTxt = e.etrPullIns ? ` · <span style="color:var(--good)">▲ beat estimate ${e.etrPullIns}×</span>` : "";
     const liveTxt = etrLiveTxt(e);
     const badge = e.promises ? `<b style="color:${pct(e)>=80?'var(--good)':pct(e)>=50?'var(--warn)':'var(--bad)'}">${pct(e)}%</b>` : `<b style="color:var(--muted)">active</b>`;
@@ -1379,7 +1379,7 @@ function renderEtr(){
       + `<span class="rl-score">${badge} ›</span></div>`;
   };
   el.innerHTML = `<div class="panel">
-    <h3>Utility ETR accuracy &amp; stability ${confTag('experimental')} <small>completed-event accuracy (met by the promised time) + current-outage ETR changes · ${tot.m}/${tot.p} met, ${totSlips} push-back${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
+    <h3>Utility ETR accuracy &amp; stability ${confTag('experimental')} <small>completed-event accuracy (met by the promised time) + current-outage ETR changes · ${tot.m}/${tot.p} met, ${totSlips} later revision${totSlips===1?"":"s"} · tap a county for its cities</small></h3>
     ${rows.map(row).join("")}</div>`;
 }
 
