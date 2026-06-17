@@ -218,7 +218,7 @@
   .replaybar[hidden] { display:none; }
   .replaybar b { color:#ffd9b0; }
   .map-wrap { position:relative; }
-  #map { height: 440px; border-radius: 12px; overflow:hidden; border:1px solid var(--line); background:#0c1420; }
+  #map { height: min(70vh, 720px); min-height: 460px; border-radius: 12px; overflow:hidden; border:1px solid var(--line); background:#0c1420; }
   #mapHint {
     position:absolute; inset:0; z-index:450; display:flex; align-items:center; justify-content:center;
     text-align:center; padding:16px; background:rgba(12,20,32,.35); color:#e8eef5; font-size:14px;
@@ -248,8 +248,10 @@
   .cbar > span { display:block; height:100%; min-width:2px; }
   .causes-legend { margin-top:11px; }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background:#16212e; color:#e8eef5; border:1px solid #2a3a4d; }
-  .leaflet-popup-content { margin:11px 13px; font-size:13px; line-height:1.5; }
-  .leaflet-popup-content b { color:#fff; }
+  /* keep the popup compact so it can't blanket the map */
+  .leaflet-popup-content { margin:10px 12px; font-size:12px; line-height:1.45; width:auto !important; max-width:230px; max-height:46vh; overflow-y:auto; }
+  .leaflet-popup-content b { color:#fff; font-weight:600; }
+  .leaflet-popup-content .pp-row { font-size:11.5px; margin-top:2px; }
   .pp-row { display:flex; justify-content:space-between; gap:2px 18px; flex-wrap:wrap; }
   a.leaflet-popup-close-button { color:#93a4b8 !important; }
 
@@ -1066,6 +1068,17 @@ function ratePlain(series, out, peak){
   return `${RATE_ICON[i.kind]||""}${trendText(i)}` + (est?` · ${est}`:"")
     + (i.algo ? ` (⚙ algorithmic · ${i.n} reading${i.n===1?"":"s"}${i.prior?" + past events":""})` : "");
 }
+// two stacked label/value rows for cards & popups: a "Restoration trend" row and,
+// when improving, a separate "App estimate" row on its own line.
+function rateRows(series, out, peak, rowCls){
+  rowCls = rowCls || "row";
+  const i = rateInfo(series, out, peak);
+  let h = `<div class="${rowCls}"><span>Restoration trend</span><b><span style="color:${RATE_COLOR[i.cls]}">${RATE_ICON[i.kind]||""}${trendText(i)}</span></b></div>`;
+  if(i.kind === "improving" && i.etaHrs != null && i.etaHrs <= 48){
+    h += `<div class="${rowCls}"><span>App estimate</span><b>~${durStr(i.etaHrs)} to baseline if recent pace holds${algoTag(i)}</b></div>`;
+  }
+  return h;
+}
 
 /* ---------- long-run per-city reliability score ---------- */
 // Built from the persistent reliability aggregates the collector accumulates over
@@ -1537,7 +1550,7 @@ function renderFirstEnergy(){
         <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
         <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(store.countyHistory[c.name])}</b></div>
-        <div class="row"><span>Restoration rate</span><b>${rateHtml(store.countyHistory[c.name], c.out, store.peaks[c.name])}</b></div>
+        ${rateRows(store.countyHistory[c.name], c.out, store.peaks[c.name])}
         <div class="row"><span>Event peak / served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
         <div class="row"><span>Utility ETR</span><b>${esc(etrStr(c.etr))}</b></div>
         ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
@@ -1642,7 +1655,7 @@ function renderCPP(){
       <div class="stat"><div class="label">Event peak</div><div class="value">~${fmt(peak)}</div></div>
       <div class="stat"><div class="label">Recovered from peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
     </div>
-    <div class="row" style="margin-bottom:6px"><span>Restoration rate</span><b>${rateHtml(store.cppHistory, acc, store.cppPeak)}</b></div>
+    <div style="margin-bottom:6px">${rateRows(store.cppHistory, acc, store.cppPeak)}</div>
     <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
     ${rows}
     <div class="sub-meta" style="margin-top:8px">CPP counts are approximate affected accounts/areas (accounts within ~100m of an out-of-service feeder; areas may overlap) and may not be directly equivalent to FirstEnergy customer-outage counts. Data collected ${asOf}.</div>`;
@@ -1752,15 +1765,16 @@ function choroColor(frac){            // frac = customers out / served
 
 /* shared outage popup (map markers + search pin) */
 function outagePopup(name, out, served, etr, key, includeRel){
-  const pr = pctRestored(key, out), peak = store.peaks[key] || 0;
+  const peak = store.peaks[key] || 0;
   const series = (key in store.cityHistory) ? store.cityHistory[key] : store.countyHistory[key];
-  return `<b>${esc(name)}</b><br>`+
+  const rel = includeRel ? relStatusLine(key) : "";
+  return `<b>${esc(name)}</b>`+
     `<div class="pp-row"><span>Currently out</span><b>${fmt(out)}</b></div>`+
     `<div class="pp-row"><span>Customers served</span><b>${fmt(served)}</b></div>`+
-    `<div class="pp-row"><span>Recovered from peak</span><b>${pctRestored(key,out)}%${peak?` (peak ${fmt(peak)})`:""}</b></div>`+
-    `<div class="pp-row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>`+
-    (includeRel ? `<div class="pp-row"><span>Reliability</span><b>${relLineHtml(key)}</b></div>` : "")+
+    `<div class="pp-row"><span>Recovered from event peak</span><b>${pctRestored(key,out)}%${peak?` · peak ${fmt(peak)}`:""}</b></div>`+
+    rateRows(series, out, peak, "pp-row")+
     `<div class="pp-row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>`+
+    (rel ? `<div class="pp-row"><span>Reliability</span><b>${rel}</b></div>` : "")+
     `<div class="pp-row"><span>Source</span><b>FirstEnergy · High confidence</b></div>`;
 }
 
@@ -2436,7 +2450,7 @@ function renderMyCity(){
     <div class="row"><span>Currently out</span><b>${fmt(out)} / ${fmt(served)} served</b></div>
     <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
     <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(series)}</b></div>
-    <div class="row"><span>Restoration rate</span><b>${rateHtml(series, out, peak)}</b></div>
+    ${rateRows(series, out, peak)}
     <div class="row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>
     ${myCity.kind==="city" ? `<div class="sub-rel" style="margin-top:9px">${relLineHtml(key)}</div>` : ""}
   </div>`;
