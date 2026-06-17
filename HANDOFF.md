@@ -12,7 +12,7 @@ server-collected history, reliability analytics, and weather context. Built to r
 |---|---|
 | Repo | `iamimaginary/Restoration-tracker` (PUBLIC) |
 | Code branch (default branch + GitHub Pages source) | `claude/first-energy-restoration-tracker-m185by` |
-| Data branch (shared snapshot) | `tracker-data` (single file `state.json` at root) |
+| Data branch (shared snapshot) | `tracker-data`: `state.json` at root + `storms/<startedAt>.json` per-storm replay files |
 | Live site | https://iamimaginary.github.io/Restoration-tracker/ (GitHub Pages) |
 | Page | `index.html` (one self-contained file: HTML + CSS + JS) |
 | Collector | `scripts/collect.mjs` (Node 20, ESM) |
@@ -199,6 +199,12 @@ refresh, auto-refresh, sort, "show all FE counties", export.
   curve** (`s.curve`, drawn via `lineChart` with peak marker + tooltip). Per-storm **Share** copies a summary
   (now incl. customer-hours, gust, causes) + `#storms` link. `renderStormLog()` guards every field (old entries
   lacking them still render). Worst-moment fields (nOutPeak/peakCauses) accumulate live on `activeStorm`.
+  **Replay (weather-radar):** each closed storm also writes `storms/<startedAt>.json` (downsampled history +
+  per-county + per-city series with locations) and gets `replayId`. The "▶ Replay on map" button
+  (`startReplay()`) loads it into the `replay` global, switches to the Map (heatmap), and drives the existing
+  playback engine (`drawMap`/`buildPlayback`/`updatePlayLabel` all branch on `replay`; replay markers use the
+  light `replayPopup`); "Exit replay" (`stopReplay()`) restores live. Orphan `storms/*.json` (aged past the
+  50-storm cap) are pruned each cycle. Files live on `tracker-data`, fetched on demand (kept out of state.json).
 - **About**: how-it-works, weather/blue-sky, privacy, open-data link (`tracker-data/state.json`),
   report numbers, trademark/attribution.
 

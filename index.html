@@ -187,6 +187,11 @@
   canvas { width: 100%; height: 220px; display: block; }
 
   /* map */
+  .replaybar { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
+    background:rgba(255,122,24,.12); border:1px solid rgba(255,122,24,.4); border-radius:10px;
+    padding:8px 12px; margin-bottom:10px; font-size:12.5px; color:var(--text); line-height:1.4; }
+  .replaybar[hidden] { display:none; }
+  .replaybar b { color:#ffd9b0; }
   .map-wrap { position:relative; }
   #map { height: 440px; border-radius: 12px; overflow:hidden; border:1px solid var(--line); background:#0c1420; }
   #mapHint {
@@ -404,6 +409,7 @@
           <label class="toggle"><input type="checkbox" id="causeChk" /> show causes</label>
         </span>
       </h3>
+      <div id="replayBar" class="replaybar" hidden></div>
       <div class="map-wrap">
         <div id="map"></div>
         <div id="mapHint" hidden>Tap the map to pan &amp; zoom</div>
@@ -1176,6 +1182,7 @@ function renderStormLog(){
       const line2 = [hit, cz?`likely causes: <b>${esc(cz)}</b>`:"", wx].filter(Boolean).join(" · ");
       return `<div class="sl-row">
         <div class="sl-when">${esc(timeStr(s.startedAt))} – ${esc(timeStr(s.endedAt))}
+          ${s.replayId?`<button class="btn pin-mini" type="button" data-replay="${esc(String(s.replayId))}">▶ Replay on map</button>`:""}
           <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
         <div class="sl-stats">${chips.map(c=>`<span>${c}</span>`).join("")}</div>
         <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${restore.length?` · ${restore.join(" · ")}`:""}</div>
@@ -1496,26 +1503,71 @@ function outagePopup(name, out, served, etr, key, includeRel){
 
 /* ---------- map + storm playback ---------- */
 let mapUnavailable = false;
-let timeline = [];          // sorted snapshot timestamps (from store.history)
+let timeline = [];          // sorted snapshot timestamps (from store.history, or a replay)
 let playIdx = null;         // null = live; else index into timeline being shown
+let replay = null;          // archived-storm replay dataset (null = live data)
+const STORM_REPLAY_BASE = "https://raw.githubusercontent.com/iamimaginary/Restoration-tracker/tracker-data/storms/";
 let playTimer = null;
 let heatLayer = null;       // city-level density overlay (heatmap mode)
 function buildPlayback(){
-  timeline = (store.history || []).map(p => p.t);
+  timeline = replay ? replay.timeline.slice() : (store.history || []).map(p => p.t);
   const pb = document.getElementById("playback"), sl = document.getElementById("playSlider");
   if(!pb || !sl) return;
-  if(timeline.length < 2){ pb.hidden = true; playIdx = null; return; }
+  if(timeline.length < 2){ pb.hidden = true; if(!replay) playIdx = null; return; }
   pb.hidden = false;
   sl.max = timeline.length - 1;
   if(playIdx == null) sl.value = sl.max;        // stay pinned to live as data grows
+  else sl.value = playIdx;
   updatePlayLabel();
 }
 function updatePlayLabel(){
   const lab = document.getElementById("playLabel");
   if(!lab) return;
-  if(playIdx == null){ lab.textContent = "live"; return; }
-  const t = timeline[playIdx], pt = (store.history||[]).find(p=>p.t===t);
+  if(playIdx == null && !replay){ lab.textContent = "live"; return; }
+  const idx = playIdx == null ? timeline.length - 1 : playIdx;
+  const t = timeline[idx];
+  const pt = (replay ? replay.history : (store.history||[])).find(p=>p.t===t);
   lab.textContent = timeStr(t) + (pt ? ` · ${fmt(pt.out)} out` : "");
+}
+/* ---------- archived-storm replay (weather-radar style scrub) ---------- */
+function countyOfId(id){ const p = String(id).split("|"); return (p.length>=5 ? p[1] : p[0]) || ""; }
+async function startReplay(id){
+  const btn = document.querySelector(`#stormlog [data-replay="${id}"]`);
+  if(btn){ btn.disabled = true; btn.textContent = "Loading…"; }
+  let data = null;
+  try { data = await fetch(STORM_REPLAY_BASE + id + ".json?t=" + Math.floor(Date.now()/300000)).then(r=> r.ok ? r.json() : null); } catch(e){}
+  if(btn){ btn.disabled = false; btn.textContent = "▶ Replay on map"; }
+  if(!data || !data.history || data.history.length < 2){ searchMsg("Replay data for that storm isn't available."); return; }
+  const counties = {};
+  const ensure = nm => counties[nm] || (counties[nm] = { name:nm, loc:null, served:0, subs:[] });
+  const countyHistory = {}, cityHistory = {};
+  for(const [nm,c] of Object.entries(data.county||{})){ const o=ensure(nm); o.loc=c.loc||o.loc; o.served=c.served||o.served; countyHistory[nm]=c.series||[]; }
+  for(const [cid,ct] of Object.entries(data.city||{})){ const o=ensure(countyOfId(cid)); if(ct.loc) o.subs.push({ id:cid, name:ct.name, loc:ct.loc, served:ct.served }); cityHistory[cid]=ct.series||[]; }
+  replay = { storm:{ startedAt:data.startedAt, endedAt:data.endedAt, peakTotal:data.peakTotal },
+    timeline: data.history.map(p=>p.t), history: data.history,
+    counties: Object.values(counties), countyHistory, cityHistory };
+  playIdx = 0;
+  granularity = "heatmap";
+  [...document.querySelectorAll("#granSeg button")].forEach(x=>x.classList.toggle("on", x.dataset.g==="heatmap"));
+  if(map) map._fitOnce = false;
+  showReplayBar();
+  showTab("map");
+  setTimeout(()=>{ buildPlayback(); drawMap(); if(!playTimer) togglePlay(); }, 80);
+}
+function stopReplay(){
+  if(playTimer){ clearInterval(playTimer); playTimer = null; const b=document.getElementById("playBtn"); if(b) b.textContent = "▶"; }
+  replay = null; playIdx = null;
+  const bar = document.getElementById("replayBar"); if(bar){ bar.hidden = true; bar.innerHTML = ""; }
+  if(map) map._fitOnce = false;
+  buildPlayback(); drawMap();
+}
+function showReplayBar(){
+  const bar = document.getElementById("replayBar"); if(!bar || !replay) return;
+  bar.hidden = false;
+  bar.innerHTML = `<span>⏪ Replaying <b>${esc(timeStr(replay.storm.startedAt))} – ${esc(timeStr(replay.storm.endedAt))}</b>`
+    + ` · peak ${fmt(replay.storm.peakTotal)} out · press ▶ or drag the slider</span>`
+    + `<button class="btn" type="button" id="replayExit">✕ Exit replay</button>`;
+  const ex = document.getElementById("replayExit"); if(ex) ex.addEventListener("click", stopReplay);
 }
 function setPlay(idx){
   playIdx = (idx == null || idx >= timeline.length - 1) ? null : idx;
@@ -1571,29 +1623,35 @@ function drawMap(){
   if(!initMap()) return;
   markerLayer.clearLayers();
   if(heatLayer){ map.removeLayer(heatLayer); heatLayer = null; }
-  const includeRestored = document.getElementById("restoredChk").checked;
-  const list = latest ? scopeCounties() : [];
-  const histT = (playIdx != null && timeline[playIdx] != null) ? timeline[playIdx] : null;   // playback time, or null = live
+  const R = replay;                                   // archived-storm replay dataset (or null = live)
+  const includeRestored = R ? false : document.getElementById("restoredChk").checked;
+  const list = R ? R.counties : (latest ? scopeCounties() : []);
+  const cHist = R ? R.countyHistory : store.countyHistory;
+  const cityHist = R ? R.cityHistory : store.cityHistory;
+  // replay always shows a scrubbed moment; live shows current unless the slider is back in time
+  const histT = R ? (timeline[(playIdx==null ? timeline.length-1 : playIdx)] ?? null)
+                  : ((playIdx != null && timeline[playIdx] != null) ? timeline[playIdx] : null);
   const valAt = (series, t) => { let v=0; if(series) for(const pt of series){ if(pt.t<=t) v=pt.out; else break; } return v; };
+  const mkPopup = (name,out,served,etr,key,twp) => R ? replayPopup(name,out,served) : outagePopup(name,out,served,etr,key,twp);
 
   // ---- heatmap mode: faint county choropleth base + finer city-level detail ----
   if(granularity === "heatmap"){
     if(!ohGeo){ loadOhGeo(); setTimeout(()=>map.invalidateSize(),0); return; }
     const byCounty = {};
-    list.forEach(c=>{ byCounty[c.name] = { out: histT!=null?valAt(store.countyHistory[c.name],histT):c.out, served:c.served, etr:c.etr }; });
+    list.forEach(c=>{ byCounty[c.name] = { out: histT!=null?valAt(cHist[c.name],histT):c.out, served:c.served, etr:c.etr }; });
     const layer = L.geoJSON(ohGeo, {
       filter: f => byCounty[f.properties.name],
       style: f => { const c=byCounty[f.properties.name]; const frac=c.served>0?c.out/c.served:0;
         return { color:"#0e1620", weight:1, fillColor:choroColor(frac), fillOpacity:0.30 }; },   // faint base
       onEachFeature: (f,ly)=>{ const nm=f.properties.name; const c=byCounty[nm];
-        ly.bindPopup(outagePopup(titleCase(nm)+" County", c.out, c.served, c.etr, nm, false)); }
+        ly.bindPopup(mkPopup(titleCase(nm)+" County", c.out, c.served, c.etr, nm, false)); }
     }).addTo(markerLayer);
 
     // finer detail: per-city outage points
     const cityPts = [];   // {loc,out,served,etr,id,name}
     list.forEach(c => (c.subs||[]).forEach(s => {
       if(!s.loc) return;
-      const out = histT!=null ? valAt(store.cityHistory[s.id], histT) : s.out;
+      const out = histT!=null ? valAt(cityHist[s.id], histT) : s.out;
       if(out > 0) cityPts.push({ loc:s.loc, out, served:s.served, etr:s.etr, id:s.id, name:titleCase(s.name)+", "+titleCase(c.name) });
     }));
     const maxOut = Math.max(1, ...cityPts.map(p=>p.out));
@@ -1603,12 +1661,12 @@ function drawMap(){
           gradient:{0.0:"#2ecc71", 0.35:"#f1c40f", 0.65:"#ff7a18", 1.0:"#e74c3c"} }).addTo(map);
       // invisible click targets so city stats are still tappable over the heat
       cityPts.forEach(p => L.circleMarker(p.loc, { radius:10, opacity:0, fillOpacity:0 })
-        .bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.id, granularity==="township")).addTo(markerLayer));
+        .bindPopup(mkPopup(p.name, p.out, p.served, p.etr, p.id, granularity==="township")).addTo(markerLayer));
     } else {
       // fallback (plugin unavailable): colored city dots by % out
       cityPts.forEach(p => { const frac = p.served>0 ? p.out/p.served : 0;
         L.circleMarker(p.loc, { radius:4+18*Math.sqrt(p.out)/Math.sqrt(maxOut), color:choroColor(frac), weight:0, fillColor:choroColor(frac), fillOpacity:0.7 })
-          .bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.id, false)).addTo(markerLayer); });
+          .bindPopup(mkPopup(p.name, p.out, p.served, p.etr, p.id, false)).addTo(markerLayer); });
     }
     const b = layer.getBounds();
     if(b.isValid() && !map._fitOnce){ map.fitBounds(b, {padding:[30,30], maxZoom:10}); map._fitOnce = true; }
@@ -1619,10 +1677,10 @@ function drawMap(){
   // build point set depending on granularity (historical out values when scrubbed)
   let points = [];
   if(granularity === "county"){
-    list.forEach(c=>{ if(c.loc) points.push({key:c.name, name:titleCase(c.name)+" County", out: histT!=null?valAt(store.countyHistory[c.name],histT):c.out, served:c.served, etr:c.etr, loc:c.loc}); });
+    list.forEach(c=>{ if(c.loc) points.push({key:c.name, name:titleCase(c.name)+" County", out: histT!=null?valAt(cHist[c.name],histT):c.out, served:c.served, etr:c.etr, loc:c.loc}); });
   } else {
     list.forEach(c=>{
-      (c.subs||[]).forEach(s=>{ if(s.loc) points.push({key:s.id, name:titleCase(s.name)+", "+titleCase(c.name), out: histT!=null?valAt(store.cityHistory[s.id],histT):s.out, served:s.served, etr:s.etr, loc:s.loc}); });
+      (c.subs||[]).forEach(s=>{ if(s.loc) points.push({key:s.id, name:titleCase(s.name)+", "+titleCase(c.name), out: histT!=null?valAt(cityHist[s.id],histT):s.out, served:s.served, etr:s.etr, loc:s.loc}); });
     });
   }
   const shown = points.filter(p=> includeRestored ? true : p.out>0);
@@ -1634,13 +1692,13 @@ function drawMap(){
     const col = markerColor(p.out, p.served, p.etr);
     const m = L.circleMarker(p.loc, {
       radius:r, color:col, weight:1, fillColor:col, fillOpacity:p.out>0?0.55:0.35
-    }).bindPopup(outagePopup(p.name, p.out, p.served, p.etr, p.key, granularity === "township"));
+    }).bindPopup(mkPopup(p.name, p.out, p.served, p.etr, p.key, granularity === "township"));
     m.addTo(markerLayer);
     bounds.push(p.loc);
   });
 
-  // Cleveland Public Power outage feeders (polygons) — current only, hidden during playback
-  if(histT == null && latestCPP && latestCPP.features && latestCPP.features.length){
+  // Cleveland Public Power outage feeders (polygons) — live only, hidden during playback/replay
+  if(!R && histT == null && latestCPP && latestCPP.features && latestCPP.features.length){
     const gj = L.geoJSON({ type:"FeatureCollection", features:latestCPP.features }, {
       style:{ color:"#a855f7", weight:1.5, fillColor:"#a855f7", fillOpacity:0.30 },
       onEachFeature:(f,layer)=>{
@@ -1661,6 +1719,13 @@ function drawMap(){
     map._fitOnce = true;   // only auto-fit on first paint; respect user panning afterward
   }
   setTimeout(()=>map.invalidateSize(), 0);
+}
+function replayPopup(name, out, served){
+  const frac = served>0 ? Math.round(out/served*1000)/10 : null;
+  return `<b>${esc(name)}</b>`+
+    `<div class="pp-row"><span>Out at this time</span><b>${fmt(out)}</b></div>`+
+    (served?`<div class="pp-row"><span>Customers served</span><b>${fmt(served)}</b></div>`:"")+
+    (frac!=null?`<div class="pp-row"><span>% out</span><b>${frac}%</b></div>`:"");
 }
 
 /* ---------- on-demand outage causes (live, client-side, like Kübra's own map) ----------
@@ -2212,7 +2277,10 @@ document.getElementById("mycity").addEventListener("keydown", e=>{
   const card = e.target.closest("[data-county]");
   if(card && (e.key==="Enter" || e.key===" ")){ e.preventDefault(); openDetail(card.dataset.county); }
 });
-document.getElementById("stormlog").addEventListener("click", e=>{ const b=e.target.closest("[data-storm]"); if(b) shareStorm(+b.dataset.storm); });
+document.getElementById("stormlog").addEventListener("click", e=>{
+  const rb = e.target.closest("[data-replay]"); if(rb){ startReplay(rb.dataset.replay); return; }
+  const b = e.target.closest("[data-storm]"); if(b) shareStorm(+b.dataset.storm);
+});
 document.getElementById("etr").addEventListener("click", e=>{ const r=e.target.closest(".etr-row[data-county]"); if(r) openDetail(r.dataset.county); });
 document.getElementById("etr").addEventListener("keydown", e=>{ const r=e.target.closest(".etr-row[data-county]"); if(r && (e.key==="Enter"||e.key===" ")){ e.preventDefault(); openDetail(r.dataset.county); } });
 document.getElementById("playSlider").addEventListener("input", e=>{

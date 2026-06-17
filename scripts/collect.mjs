@@ -4,7 +4,7 @@
 // Triggered ~every 15 min. The storm history is reset ONLY on demand (run the
 // workflow with reset=true, which sets RESET — archives the current storm and
 // starts fresh). There is no automatic time-based reset.
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 
 // Cross-check the headline numbers two ways:
 //  • internal (always available): our county-sum vs FirstEnergy's OWN published Ohio
@@ -482,6 +482,24 @@ function loadPrev(){
           // max observed gust over the storm's days
           let maxGust = 0;
           for(let t=activeStorm.startedAt; t<=belowSince+864e5; t+=864e5){ const w = wind[new Date(t).toISOString().slice(0,10)]; if(w && w.gust>maxGust) maxGust = w.gust; }
+          // archive a per-location history file so the storm can be replayed on the map (radar-style).
+          // Locations are stable and present for every area in the report, so we grab them now.
+          const replayId = activeStorm.startedAt;
+          try {
+            const RP = 80;            // downsample points per series (smooth scrub, bounded size)
+            const cMeta = {}, sMeta = {};
+            fe.counties.forEach(c => { cMeta[c.name] = { loc:c.loc, served:c.served };
+              c.subs.forEach(s => { sMeta[s.id] = { name:s.name, loc:s.loc, served:s.served }; }); });
+            const county = {};
+            for(const [k,v] of Object.entries(countyHistory)){ if(v && v.length){ const m=cMeta[k]||{}; county[k] = { loc:m.loc||null, served:m.served||0, series: downsample(v, RP) }; } }
+            const city = {};
+            for(const [k,v] of Object.entries(cityHistory)){ if(v && v.length){ const m=sMeta[k]; if(m && m.loc) city[k] = { name:m.name, loc:m.loc, served:m.served||0, series: downsample(v, RP) }; } }
+            mkdirSync("data/storms", { recursive: true });
+            writeFileSync(`data/storms/${replayId}.json`, JSON.stringify({
+              startedAt: activeStorm.startedAt, endedAt: belowSince, peakTotal,
+              history: downsample(history, RP), county, city
+            }));
+          } catch(e){ console.error("replay file write failed:", e.message); }
           stormLog.unshift({
             startedAt: activeStorm.startedAt, endedAt: belowSince,
             durationHrs: Math.round((belowSince - activeStorm.startedAt) / 3600000 * 10) / 10,
@@ -493,7 +511,8 @@ function loadPrev(){
             maxGustMph: maxGust ? Math.round(maxGust) : null,
             weatherEvents: wEvents,
             causes: activeStorm.peakCauses || null,        // cause mix at the worst moment
-            curve: downsample(history, 48)                 // thumbnail of the outage curve
+            curve: downsample(history, 48),                // thumbnail of the outage curve
+            replayId                                       // → data/storms/<replayId>.json
           });
           while(stormLog.length > 50) stormLog.pop();
         }
@@ -535,6 +554,11 @@ function loadPrev(){
       if(ev.length) s.weatherEvents = ev;
     }
   });
+  // prune replay files for storms that have aged out of the log
+  try {
+    const keep = new Set(stormLog.map(s=>String(s.replayId)).filter(Boolean));
+    for(const f of readdirSync("data/storms")){ if(f.endsWith(".json") && !keep.has(f.replace(/\.json$/,""))) unlinkSync(`data/storms/${f}`); }
+  } catch(e){ /* dir may not exist yet */ }
 
   const state = {
     schema: 1, collectedAt: now,
