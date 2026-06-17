@@ -1834,7 +1834,10 @@ function lineChart(canvas, data, color, emptyMsg, opts){
     if(opts.bars){
       data.forEach((d,i)=>{ const cx=x(i), yy=y(d.out);
         ctx.fillStyle = (opts.stormDays && d.day && opts.stormDays.has(d.day)) ? "#ff7a18" : color.line;
-        ctx.fillRect(cx-barW/2, yy, barW, (pad.t+plotH)-yy); });
+        ctx.fillRect(cx-barW/2, yy, barW, (pad.t+plotH)-yy);
+        const lbl = opts.barLabel && opts.barLabel(d);
+        if(lbl){ ctx.fillStyle="#ffd9b0"; ctx.font="bold 10px sans-serif"; ctx.textAlign="center"; ctx.textBaseline="bottom"; ctx.fillText(lbl, cx, Math.max(pad.t+10, yy-3)); }
+      });
     } else {
       ctx.beginPath(); ctx.moveTo(x(0), y(data[0].out)); data.forEach((d,i)=>ctx.lineTo(x(i), y(d.out)));
       ctx.lineTo(x(data.length-1), pad.t+plotH); ctx.lineTo(x(0), pad.t+plotH); ctx.closePath();
@@ -1877,6 +1880,7 @@ function attachChartHover(canvas){
     ctx.strokeStyle="rgba(255,255,255,.30)"; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(px,c.pad.t); ctx.lineTo(px,c.pad.t+c.plotH); ctx.stroke();
     ctx.fillStyle="#fff"; ctx.strokeStyle=c.color.line; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(px,py,4,0,Math.PI*2); ctx.fill(); ctx.stroke();
     const lines=[ c.yFmt(d.out)+(c.valueLabel?(" "+c.valueLabel):""), c.xFmtTip(d.t) ];
+    if(d.note) lines.push(d.note);
     const alert=c.bandAt(d.t); if(alert) lines.push("⛈ "+alert);
     ctx.font="12px sans-serif";
     const tw = Math.max(...lines.map(s=>ctx.measureText(s).width)) + 16;
@@ -1906,18 +1910,25 @@ function drawChart(){
     "Collecting live snapshots — the trend line appears after a couple of updates.",
     { tooltip:true, peak:true, bands, valueLabel:"customers out" });
 }
+const GUST_HI = 45;   // mph — a gust this strong is a likely outage-causing wind/storm day
 function drawRelTrend(){
   const cv = document.getElementById("relTrendChart"); if(!cv) return;
   const note = document.getElementById("relTrendNote");
-  const data = (relTrend||[]).map(d => ({ t: Date.parse(d.day+"T12:00:00Z"), out: d.availPct, day: d.day }));
+  const data = (relTrend||[]).map(d => ({
+    t: Date.parse(d.day+"T12:00:00Z"), out: d.availPct, day: d.day, gust: d.gustMph || null,
+    note: d.gustMph ? ("gusts to " + d.gustMph + " mph" + (d.windMph ? " (sustained " + d.windMph + ")" : "")) : null
+  }));
   const dayStr = ms => new Date(ms).toISOString().slice(0,10);
-  const stormDays = new Set();   // highlight days overlapping a logged storm or severe weather
+  const stormDays = new Set();   // highlight days with a logged storm, severe alert, OR a high gust
   (pastStorms||[]).forEach(s=>{ if(s.startedAt&&s.endedAt) for(let t=s.startedAt;t<=s.endedAt;t+=864e5) stormDays.add(dayStr(t)); });
   (weatherLog||[]).forEach(e=>{ if(/severe|extreme/i.test(e.severity||"")){ const a=Date.parse(e.onset)||e.firstSeen, b=Date.parse(e.ends)||e.lastSeen||a; if(a) for(let t=a;t<=b;t+=864e5) stormDays.add(dayStr(t)); } });
+  data.forEach(d=>{ if(d.gust >= GUST_HI) stormDays.add(d.day); });
+  const anyStorm = data.some(d=>stormDays.has(d.day));
   if(note) note.textContent = data.length < 2 ? "daily NE Ohio availability — builds over days"
-    : (data.length+" days" + ([...stormDays].some(d=>data.find(x=>x.day===d)) ? " · orange = storm day" : ""));
+    : (data.length+" days" + (anyStorm ? " · orange = storm / high-wind day" : ""));
   lineChart(cv, data, BLUE, "Daily availability appears here after a couple of days of data.",
     { tooltip:true, bars:true, yMode:"zoom", absMax:100, minPad:0.4, stormDays,
+      barLabel: d => (d.gust && stormDays.has(d.day)) ? (d.gust + " mph") : null,
       yFmt:v=>v.toFixed(2)+"%", valueLabel:"uptime",
       xFmt:t=>new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"}),
       xFmtTip:t=>new Date(t).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) });

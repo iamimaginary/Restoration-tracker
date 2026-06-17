@@ -164,6 +164,20 @@ async function fetchCauses(tmpl, totalCust){
   return { sampledAt: Date.now(), totalCust, knownCust, incidents, fetches, byCause };
 }
 
+// Observed daily max wind gust for NE Ohio (Cleveland), keyed by UTC day to match relTrend.
+// Open-Meteo: free, no key, mph. Used to annotate the reliability trend's storm days.
+async function fetchWind(){
+  const u = "https://api.open-meteo.com/v1/forecast?latitude=41.50&longitude=-81.69"
+    + "&daily=wind_gusts_10m_max,wind_speed_10m_max&wind_speed_unit=mph&timezone=GMT&past_days=14&forecast_days=1";
+  const d = await jget(u);
+  const days = (d.daily && d.daily.time) || [];
+  const g = (d.daily && d.daily.wind_gusts_10m_max) || [];
+  const wd = (d.daily && d.daily.wind_speed_10m_max) || [];
+  const map = {};
+  days.forEach((day,i)=>{ if(g[i] != null) map[day] = { gust: g[i], wind: wd[i] }; });
+  return map;
+}
+
 async function fetchCPP(){
   const data = await jget(`https://www.arcgis.com/sharing/rest/content/items/${CPP_WEBMAP}/data?f=json`);
   const layer = (data.operationalLayers||[]).find(l=>/Approximate Outage/i.test(l.title||""));
@@ -238,6 +252,11 @@ function loadPrev(){
   let causes = prev.causes || null;
   try { causes = await fetchCauses(fe.clusterTmpl, fe.official.out); }
   catch(e){ console.error("Causes crawl failed:", e.message); }
+
+  // Daily max wind gust (best-effort) to annotate the reliability trend.
+  let wind = {};
+  try { wind = await fetchWind(); }
+  catch(e){ console.error("Wind fetch failed:", e.message); }
 
   const now = Date.now();
   const cppBlock = cpp ? { updatedAt: cpp.updatedAt, accounts: cpp.accounts, feeders: cpp.feeders, features: cpp.features }
@@ -339,6 +358,8 @@ function loadPrev(){
     relDay = { day: dayKey, outHrs: 0, custHrs: 0 };
   }
   if(dtCycle > 0 && neoServed > 0){ relDay.outHrs += neoOut * dtCycle; relDay.custHrs += neoServed * dtCycle; }
+  // annotate each day with its observed max wind gust (fills in as Open-Meteo finalizes each day)
+  relTrend.forEach(d => { const w = wind[d.day]; if(w){ d.gustMph = Math.round(w.gust); if(w.wind != null) d.windMph = Math.round(w.wind); } });
 
   // ---- ETR accuracy + churn per county (persistent) ----
   // accuracy: restored by the promised time?  churn: how often the ETR was revised mid-outage —

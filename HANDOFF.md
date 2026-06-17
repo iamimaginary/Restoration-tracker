@@ -75,6 +75,9 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   the tiles covering the current viewport at the current zoom (no descent, no server cost). Cause is NOT in the
   county/township rollup — only here. NOTE: aggregate "leading causes" panel was deferred (a full crawl costs
   ~250 fetches even in blue-sky, balloons in storms) — see open items.
+- **Wind** = Open-Meteo (`api.open-meteo.com/v1/forecast`, free, no key) — observed **daily max wind gust** for
+  NE Ohio (Cleveland 41.50,-81.69), `wind_gusts_10m_max`/`wind_speed_10m_max` in mph, `timezone=GMT` so day
+  buckets match relTrend's UTC `dayKey`. Collector-side; annotates the reliability trend's storm days.
 - **ZIP search** = `api.zippopotam.us/us/{zip}` (client-side).
 - Map tiles CARTO dark; Leaflet 1.9.4 + Leaflet.heat 0.2.0 (unpkg, pinned + SRI).
 
@@ -128,7 +131,7 @@ cron-job.org (every 15 min)  ──POST repository_dispatch {event_type:"collect
   etrCity:{ areaId:{county,name,...same etr fields...} },
   weather:{ updatedAt, counties:{COUNTY:[events]}, alerts:[{id,event,severity,counties,onset,ends}] },
   weatherLog:[{id,event,severity,counties,onset,ends,firstSeen,lastSeen}],
-  relDay:{day,outHrs,custHrs}, relTrend:[{day,availPct}],   // daily NE Ohio availability
+  relDay:{day,outHrs,custHrs}, relTrend:[{day,availPct,gustMph,windMph}],   // daily NE Ohio availability + observed max gust (Open-Meteo)
   crosscheck:{                                              // hybrid data cross-check
     internal:{ feOfficial, feServedOfficial,               // FirstEnergy's OWN published OH totals (Kübra)
                feSum, feServedSum,                          // our sum across all counties (should match feOfficial)
@@ -166,7 +169,9 @@ refresh, auto-refresh, sort, "show all FE counties", export.
   Kübra cluster tiles (`renderCauses`/`loadCauses`, `causeLayer`); zoom drives cluster→incident resolution.
 - **Trends**: NE Ohio outage trend chart (area + **peak marker** + translucent **weather-alert bands** from
   `weatherLog`, severity-colored) and daily **reliability trend** (bars on a **zoomed** availability axis so
-  near-100% differences are visible; **storm days** highlighted orange via pastStorms/severe-weather overlap).
+  near-100% differences are visible; **storm days** highlighted orange via pastStorms/severe-weather overlap
+  OR a high observed gust [≥45 mph], with the **max gust labeled** above those bars and shown in the tooltip —
+  gust data from Open-Meteo, stored per-day in relTrend).
   Both charts have **hover/tap crosshair tooltips** (exact value + time + any active alert). The shared
   `lineChart(canvas,data,color,emptyMsg,opts)` engine takes opts `{tooltip,peak,bands,bars,yMode:'zoom',
   absMax,minPad,stormDays,yFmt,xFmt,xFmtTip,valueLabel}`; default (no opts) preserves the simple area chart
