@@ -490,7 +490,7 @@
     <div id="utility"></div>
     <div id="reliability"></div>
     <div id="etr"></div>
-    <div id="reliabilityEmpty" class="empty" style="display:none">Reliability estimates and utility-ETR-accuracy stats appear here once at least 3 days of observations have been collected. Scores are unstable early and improve over weeks.</div>
+    <div id="reliabilityEmpty" class="empty" style="display:none">Per-season reliability estimates and utility-ETR-accuracy stats appear here once at least 3 days of observations have been collected this season. Scores are unstable early in a season and stabilize as it fills in.</div>
   </section>
 
   <!-- STORMS -->
@@ -534,11 +534,13 @@
       so they don't read as authoritative as the raw counts. The shared history <b>auto-advances</b> — when an event
       returns to a low baseline it's archived to the Events tab and the next one starts on its own (this is a
       threshold, not a utility-confirmed restoration).</p>
-      <p><b>Reliability estimate (experimental):</b> Once a city has ~3 days of observations, it gets a snapshot-derived
-      reliability <em>estimate</em> — this is not a utility reliability report. The headline is <em>availability</em>
+      <p><b>Reliability estimate (experimental):</b> Once a city has ~3 days of observations <em>this season</em>, it
+      gets a snapshot-derived reliability <em>estimate</em> — this is not a utility reliability report. It's reported
+      <b>per meteorological season</b> (winter/spring/summer/fall) rather than as one lifetime average, so it reflects
+      recent conditions and refreshes each season instead of ratcheting forever. The headline is <em>availability</em>
       — the share of customer-time with power (an ASAI-style measure) — graded A+ to F, alongside how often it has any
-      outage and its worst severity seen. It's built only from collected snapshots, so it's unstable early (reflecting
-      whatever events fell in the window) and stabilizes over weeks.</p>
+      outage and its worst severity seen <em>this season</em>. It's built only from collected snapshots, so it's
+      unstable early in a season and stabilizes as the season fills in.</p>
       <p><b>ETR accuracy (experimental):</b> For completed outages we compare each utility ETR against when power
       actually came back — "met" if restored by the promised time — and count how often the estimate was moved later.
       Completed-event accuracy and current-outage ETR churn are shown together per county but labeled distinctly.
@@ -657,6 +659,7 @@ let causes = null;          // leading outage-cause breakdown (from shared state
 let snapshotAt = null;      // when the shared snapshot was collected/published (collectedAt)
 let lastCheckedAt = null;   // when this browser last checked for updates
 let activeEvent = null;     // current in-progress outage event (from shared state's activeStorm)
+let eventPeakServer = 0;    // true running NE-Ohio event peak from the collector (non-eroding)
 let timer = null;
 let map = null, markerLayer = null, searchLayer = null;
 let causeLayer = null, causeOn = false, causeTmpl = null, causeSeq = 0;
@@ -827,6 +830,7 @@ function applyShared(s){
   causes = s.causes || null;
   snapshotAt = s.collectedAt || null;
   activeEvent = s.activeStorm || null;
+  eventPeakServer = s.neoPeak || 0;
   // sync dedup markers so a live fallback appends only genuinely newer points
   store.lastUpdatedAt = store.history.length ? store.history[store.history.length-1].t : 0;
   store.cppLastUpdated = store.cppHistory.length ? store.cppHistory[store.cppHistory.length-1].t : 0;
@@ -1011,7 +1015,8 @@ function postPeakCount(series){
   let c=0; for(let i=pk;i<series.length;i++) if(series[i].out>0) c++;
   return c;
 }
-function rateInfo(series, out, peak){
+function rateInfo(series, out, peak, usePrior){
+  usePrior = usePrior !== false;                    // FE areas blend a historical prior; CPP passes false
   const n = series ? series.length : 0;
   if(out <= 0) return { cls:"good", kind:"restored", n };
   const r = restorationRate(series);
@@ -1022,7 +1027,7 @@ function rateInfo(series, out, peak){
     // observed (linear) hours-to-baseline, blended with a fading historical-pace prior:
     // weighted heavily early (few post-peak readings), fading to the observed decline.
     let eta = out / ph, usedPrior = false;
-    const prior = priorEta(out, peak);
+    const prior = usePrior ? priorEta(out, peak) : null;
     if(prior != null){ const w = Math.min(1, postPeakCount(series) / 8); eta = w*eta + (1-w)*prior; usedPrior = w < 0.75; }
     return { cls:"good", kind:"improving", perHour:ph, etaHrs:eta, algo:true, prior:usedPrior, n };
   }
@@ -1040,11 +1045,14 @@ function trendText(i){
   return "";
 }
 const RATE_ICON = { restored:"✓ ", improving:"▼ ", rising:"▲ ", holding:"↔ ", collecting:"" };
-// app/algorithmic estimate phrase — extrapolation, never an official prediction
-function estText(i){
+// app/algorithmic estimate phrase — extrapolation, never an official prediction. Only claims
+// "if recent pace holds" when it's purely observed; when the historical prior is weighted in,
+// it says so, so the estimate never contradicts the shown rate.
+function estPhrase(i){
   if(i.kind !== "improving" || i.etaHrs == null || i.etaHrs > 48) return "";
-  return `App estimate: ~${durStr(i.etaHrs)} to baseline if recent pace holds`;
+  return `~${durStr(i.etaHrs)} to baseline ${i.prior ? "(recent pace + typical recovery)" : "if recent pace holds"}`;
 }
+function estText(i){ const p = estPhrase(i); return p ? `App estimate: ${p}` : ""; }
 // the restoration estimate is the app's OWN projection, not a utility ETR — label it
 // as algorithmically generated, note how much current-event data it uses, and flag when an early
 // estimate is leaning on past events.
@@ -1070,13 +1078,12 @@ function ratePlain(series, out, peak){
 }
 // two stacked label/value rows for cards & popups: a "Restoration trend" row and,
 // when improving, a separate "App estimate" row on its own line.
-function rateRows(series, out, peak, rowCls){
+function rateRows(series, out, peak, rowCls, usePrior){
   rowCls = rowCls || "row";
-  const i = rateInfo(series, out, peak);
+  const i = rateInfo(series, out, peak, usePrior);
   let h = `<div class="${rowCls}"><span>Restoration trend</span><b><span style="color:${RATE_COLOR[i.cls]}">${RATE_ICON[i.kind]||""}${trendText(i)}</span></b></div>`;
-  if(i.kind === "improving" && i.etaHrs != null && i.etaHrs <= 48){
-    h += `<div class="${rowCls}"><span>App estimate</span><b>~${durStr(i.etaHrs)} to baseline if recent pace holds${algoTag(i)}</b></div>`;
-  }
+  const p = estPhrase(i);
+  if(p) h += `<div class="${rowCls}"><span>App estimate</span><b>${p}${algoTag(i)}</b></div>`;
   return h;
 }
 
@@ -1088,21 +1095,31 @@ function rateRows(series, out, peak, rowCls){
 const REL_ENOUGH_HRS = 72;
 function relGrade(a){ return a>=99.99?"A+":a>=99.95?"A":a>=99.8?"B":a>=99.5?"C":a>=99?"D":"F"; }
 function relColor(g){ return (g==="A+"||g==="A")?"var(--good)":g==="B"?"var(--blue)":g==="C"?"var(--warn)":"var(--bad)"; }
+// current meteorological season (winter = Dec–Feb). Matches the collector's seasonOf().
+const SEASON_LABEL = { winter:"Winter", spring:"Spring", summer:"Summer", fall:"Fall" };
+function curSeasonName(){ const m=new Date().getMonth(); return (m===11||m<=1)?"winter":m<=4?"spring":m<=7?"summer":"fall"; }
+// Reliability is reported per SEASON (so it reflects recent behavior and recovers each season,
+// rather than ratcheting forever). Uses the current-season bucket; falls back to the lifetime
+// aggregate for older records that predate seasonal buckets.
 function relScore(r){
-  if(!r || !(r.custHrs > 0)) return null;
-  const days = (r.timeHrs || 0) / 24;
-  if((r.timeHrs || 0) < REL_ENOUGH_HRS) return { building:true, days };
-  const avail = (1 - r.outHrs / r.custHrs) * 100;
+  if(!r) return null;
+  const seas = curSeasonName();
+  const b = (r.seasons && r.seasons[seas] && r.seasons[seas].custHrs > 0) ? r.seasons[seas] : r;
+  const seasonal = b !== r;
+  if(!(b.custHrs > 0)) return null;
+  const days = (b.timeHrs || 0) / 24;
+  if((b.timeHrs || 0) < REL_ENOUGH_HRS) return { building:true, days, season:seas, seasonal };
+  const avail = (1 - b.outHrs / b.custHrs) * 100;
   return {
     availPct: avail,
-    outPct: r.timeHrs > 0 ? (r.outTimeHrs / r.timeHrs) * 100 : 0,
-    peakPct: (r.peakFrac || 0) * 100,
-    events: r.events || 0,
-    days, grade: relGrade(avail),
-    interruptions: r.events || 0,                                   // SAIFI-style: # of distinct outages
-    avgOutageHrs: (r.events > 0) ? (r.outTimeHrs || 0) / r.events : 0,  // CAIDI-style: avg length per outage
-    blueEvents: r.blueEvents || 0,                                  // outages with no weather event
-    blueShare: r.outHrs > 0 ? ((r.outHrsBlue || 0) / r.outHrs) * 100 : 0
+    outPct: b.timeHrs > 0 ? (b.outTimeHrs / b.timeHrs) * 100 : 0,
+    peakPct: (b.peakFrac || 0) * 100,
+    events: b.events || 0,
+    days, grade: relGrade(avail), season: seas, seasonal,
+    interruptions: b.events || 0,                                   // SAIFI-style: # of distinct outages
+    avgOutageHrs: (b.events > 0) ? (b.outTimeHrs || 0) / b.events : 0,  // CAIDI-style: avg length per outage
+    blueEvents: b.blueEvents || 0,                                  // outages with no weather event
+    blueShare: b.outHrs > 0 ? ((b.outHrsBlue || 0) / b.outHrs) * 100 : 0
   };
 }
 // ETR revisions, split by direction: push-backs (estimate moved later) count against
@@ -1132,12 +1149,13 @@ function etrSuffix(id){
   const rev = slips ? ` · ${(slips/e.promises).toFixed(1)}× moved later/outage` : "";
   return ` · <b style="color:${pctv>=80?'var(--good)':pctv>=50?'var(--warn)':'var(--bad)'}">ETR ${e.met}/${e.promises} met</b>${rev}${live}`;
 }
+function relTitle(sc){ return (sc && sc.seasonal) ? `${SEASON_LABEL[sc.season]} reliability estimate` : "Reliability estimate"; }
 function relLineHtml(id){
   const etr = etrSuffix(id);
   const sc = relScore(reliability[id]);
   if(!sc) return `<span style="color:var(--muted)">Reliability estimate: collecting…</span>${etr}`;
-  if(sc.building) return `<span style="color:var(--muted)">Reliability estimate: collecting (${sc.days.toFixed(1)}d / 3d min)</span>${etr}`;
-  return `Reliability estimate <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
+  if(sc.building) return `<span style="color:var(--muted)">${relTitle(sc)}: collecting (${sc.days.toFixed(1)}d / 3d min)</span>${etr}`;
+  return `${relTitle(sc)} <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
        + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
        + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "")
        + etr;
@@ -1146,8 +1164,8 @@ function relLineHtml(id){
 function relStatusLine(id){
   const sc = relScore(reliability[id]);
   if(!sc) return "Reliability estimate: collecting…";
-  if(sc.building) return `Reliability estimate: collecting · ${sc.days.toFixed(1)}d / 3d minimum`;
-  return `Reliability estimate <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
+  if(sc.building) return `${relTitle(sc)}: collecting · ${sc.days.toFixed(1)}d / 3d minimum`;
+  return `${relTitle(sc)} <b style="color:${relColor(sc.grade)}">${sc.grade}</b> · ${sc.availPct.toFixed(2)}% uptime · `
     + `${sc.interruptions} interruption${sc.interruptions===1?"":"s"}${sc.avgOutageHrs?`, ~${durStr(sc.avgOutageHrs)} avg`:""} <small>(${sc.days.toFixed(0)}d)</small>`
     + (sc.blueEvents > 0 ? ` · <b style="color:var(--bad)">⚠ ${sc.blueEvents} with no weather</b>` : "");
 }
@@ -1332,7 +1350,7 @@ function renderReliabilityPanel(){
     </div>` : "";
 
   el.innerHTML = `<div class="panel">
-    <h3>City reliability estimate ${confTag('experimental')} <small>snapshot-derived availability · last ~${days.toFixed(0)} days · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable</small></h3>
+    <h3>City reliability estimate ${confTag('experimental')} <small>this ${SEASON_LABEL[curSeasonName()]} · snapshot-derived availability · ~${days.toFixed(0)} days so far · NE Ohio avg ${avgAvail.toFixed(2)}% · higher = more dependable</small></h3>
     <div class="movers">
       <div><div class="mv-h bad">Least dependable</div>${least.map(row).join("")}</div>
       <div><div class="mv-h good">Most dependable</div>${most.map(row).join("")}</div>
@@ -1344,12 +1362,14 @@ function renderReliabilityPanel(){
 function renderUtility(){
   const el = document.getElementById("utility");
   if(!el) return;
-  const agg = {};   // utility -> { outHrs, custHrs, days }
+  const seas = curSeasonName();
+  const agg = {};   // utility -> { outHrs, custHrs, days } — current-season buckets
   for(const r of Object.values(reliability)){
-    if(!(r.custHrs > 0) || (r.timeHrs || 0) < REL_ENOUGH_HRS) continue;
+    const b = (r.seasons && r.seasons[seas] && r.seasons[seas].custHrs > 0) ? r.seasons[seas] : r;
+    if(!(b.custHrs > 0) || (b.timeHrs || 0) < REL_ENOUGH_HRS) continue;
     const util = NEO[r.county] || "FirstEnergy";
     const a = agg[util] || (agg[util] = { outHrs:0, custHrs:0, days:0 });
-    a.outHrs += r.outHrs; a.custHrs += r.custHrs; a.days = Math.max(a.days, (r.timeHrs||0)/24);
+    a.outHrs += b.outHrs; a.custHrs += b.custHrs; a.days = Math.max(a.days, (b.timeHrs||0)/24);
   }
   const rows = Object.entries(agg).filter(([,a]) => a.custHrs > 0)
     .map(([util,a]) => ({ util, avail:(1 - a.outHrs/a.custHrs)*100, days:a.days }))
@@ -1360,7 +1380,7 @@ function renderUtility(){
       <span class="rl-score"><b style="color:${relColor(relGrade(x.avail))}">${relGrade(x.avail)}</b> ${x.avail.toFixed(2)}%</span>
     </div>`).join("");
   el.innerHTML = `<div class="panel">
-    <h3>Utility comparison ${confTag('experimental')} <small>snapshot-derived, customer-weighted availability over the last ~${rows[0].days.toFixed(0)} days</small></h3>
+    <h3>Utility comparison ${confTag('experimental')} <small>this ${SEASON_LABEL[seas]} · snapshot-derived, customer-weighted availability · ~${rows[0].days.toFixed(0)} days so far</small></h3>
     ${body}
     <div class="sub-meta" style="margin-top:8px">Cleveland Public Power is tracked separately (feeder-level, approximate) and isn't directly comparable here.</div>
   </div>`;
@@ -1504,7 +1524,7 @@ function renderFirstEnergy(){
   const h = store.history || [];
   let eventPeak = 0, eventPeakAt = null;
   h.forEach(p=>{ if(p.out > eventPeak){ eventPeak = p.out; eventPeakAt = p.t; } });
-  if(activeEvent && (activeEvent.peakTotal||0) > eventPeak){ eventPeak = activeEvent.peakTotal; eventPeakAt = activeEvent.peakAt || eventPeakAt; }
+  if(eventPeakServer > eventPeak){ eventPeak = eventPeakServer; }   // true running NEO peak (history max can erode on long events); time stays from history
   if(eventPeak < totOut){ eventPeak = totOut; eventPeakAt = latest.updatedAt; }
   const recovered = eventPeak > 0 ? Math.max(0, Math.min(100, Math.round((eventPeak - totOut)/eventPeak*100))) : (totOut>0?0:100);
   const fromPeak = Math.max(0, eventPeak - totOut);
@@ -1655,7 +1675,7 @@ function renderCPP(){
       <div class="stat"><div class="label">Event peak</div><div class="value">~${fmt(peak)}</div></div>
       <div class="stat"><div class="label">Recovered from peak</div><div class="value">${restoredPct}%</div><div class="bar"><span style="width:${restoredPct}%"></span></div></div>
     </div>
-    <div style="margin-bottom:6px">${rateRows(store.cppHistory, acc, store.cppPeak)}</div>
+    <div style="margin-bottom:6px">${rateRows(store.cppHistory, acc, store.cppPeak, "row", false)}</div>
     <canvas id="cpp_chart" style="height:150px;display:block;margin:4px 0 12px"></canvas>
     ${rows}
     <div class="sub-meta" style="margin-top:8px">CPP counts are approximate affected accounts/areas (accounts within ~100m of an out-of-service feeder; areas may overlap) and may not be directly equivalent to FirstEnergy customer-outage counts. Data collected ${asOf}.</div>`;

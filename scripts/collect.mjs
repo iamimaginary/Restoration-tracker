@@ -71,6 +71,15 @@ function downsample(series, n){
   return out;
 }
 
+// meteorological season + occurrence key. Winter (Dec–Feb) is keyed to the December year,
+// so a single occurrence (e.g. "winter-2026") spans the calendar boundary.
+function seasonOf(ms){
+  const d = new Date(ms), m = d.getMonth(), y = d.getFullYear();   // m: 0=Jan … 11=Dec
+  const s = (m===11 || m<=1) ? "winter" : m<=4 ? "spring" : m<=7 ? "summer" : "fall";
+  const yr = (s==="winter" && m<=1) ? y-1 : y;
+  return { s, key: `${s}-${yr}` };
+}
+
 // Look like a browser and retry — FirstEnergy's CDN (KUBRA) intermittently 403s
 // requests from datacenter IPs / non-browser clients.
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
@@ -295,6 +304,9 @@ function loadPrev(){
     c.subs.forEach(s => { if((peaks[s.id]||0) < s.out) peaks[s.id] = s.out; });
   });
   let cppPeak = Math.max(prev.cppPeak||0, cppOut);
+  // true running NE-Ohio event peak — a running max (reset on event close), so it can't be
+  // eroded by history capping the way max(history) can on a very long event.
+  let neoPeak = Math.max(prev.neoPeak||0, neoOut);
 
   // histories (append only when the underlying feed timestamp advanced)
   const history = [...(prev.history||[])];
@@ -332,6 +344,10 @@ function loadPrev(){
   }
   const stormContext = !!prev.activeStorm || totalAll >= STORM_START;
 
+  // meteorological season + occurrence (winter spans Dec–Feb, keyed to the December year),
+  // so reliability can be reported per season instead of one ever-ratcheting lifetime average.
+  const cur = seasonOf(now);
+  const blankSeason = occ => ({ occ, outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, peakFrac:0, events:0, outHrsBlue:0, outTimeBlueHrs:0, blueEvents:0 });
   const reliability = structuredClone(prev.reliability || {});
   fe.counties.forEach(c => {
     const blueCtx = !stormContext && !recentWxCounties.has(c.name);   // true ⇒ no weather/storm excuse
@@ -344,22 +360,28 @@ function loadPrev(){
       r.name = s.name; r.county = c.name; r.served = s.served;
       // migrate older records that lack the blue-sky fields
       if(r.outHrsBlue == null){ r.outHrsBlue = 0; r.outTimeBlueHrs = 0; r.blueEvents = 0; }
+      // seasonal buckets: seed from lifetime on first migration (all data so far is the current
+      // season for this app's age), then accumulate per season; a fresh occurrence starts clean.
+      if(!r.seasons){ r.seasons = { [cur.s]: { occ:cur.key, outHrs:r.outHrs||0, custHrs:r.custHrs||0, outTimeHrs:r.outTimeHrs||0, timeHrs:r.timeHrs||0, peakFrac:r.peakFrac||0, events:r.events||0, outHrsBlue:r.outHrsBlue||0, outTimeBlueHrs:r.outTimeBlueHrs||0, blueEvents:r.blueEvents||0 } }; }
+      let sb = r.seasons[cur.s];
+      if(!sb || sb.occ !== cur.key) sb = r.seasons[cur.s] = blankSeason(cur.key);
       if(r.lastT){
         const dt = Math.min(now - r.lastT, REL_DT_CAP_MS) / 3600000;   // hours, capped
         if(dt > 0){
-          r.outHrs  += s.out * dt;
-          r.custHrs += s.served * dt;
-          r.timeHrs += dt;
+          r.outHrs  += s.out * dt;        sb.outHrs  += s.out * dt;
+          r.custHrs += s.served * dt;     sb.custHrs += s.served * dt;
+          r.timeHrs += dt;                sb.timeHrs += dt;
           if(s.out > 0){
-            r.outTimeHrs += dt;
-            if(blueCtx){ r.outHrsBlue += s.out * dt; r.outTimeBlueHrs += dt; }   // outage with NO weather excuse
+            r.outTimeHrs += dt;           sb.outTimeHrs += dt;
+            if(blueCtx){ r.outHrsBlue += s.out * dt; r.outTimeBlueHrs += dt; sb.outHrsBlue += s.out * dt; sb.outTimeBlueHrs += dt; }
           }
         }
       }
-      if(s.out > 0 && !(r._prevOut > 0)){ r.events++; if(blueCtx) r.blueEvents++; }   // distinct onsets; blue-sky ones flagged
+      if(s.out > 0 && !(r._prevOut > 0)){ r.events++; sb.events++; if(blueCtx){ r.blueEvents++; sb.blueEvents++; } }   // distinct onsets
       r._prevOut = s.out;
       const frac = Math.min(1, s.out / s.served);
       if(frac > r.peakFrac) r.peakFrac = frac;
+      if(frac > sb.peakFrac) sb.peakFrac = frac;
       r.obs++; r.lastT = now;
     });
   });
@@ -520,7 +542,7 @@ function loadPrev(){
         for(const k of Object.keys(countyHistory)) delete countyHistory[k];
         for(const k of Object.keys(cityHistory)) delete cityHistory[k];
         for(const k of Object.keys(peaks)) delete peaks[k];
-        cppPeak = 0; activeStorm = null; belowSince = null; closed = true;
+        cppPeak = 0; neoPeak = 0; activeStorm = null; belowSince = null; closed = true;
       }
     } else {
       belowSince = null;
@@ -565,7 +587,7 @@ function loadPrev(){
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
     cpp: cppBlock,
-    peaks, cppPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
+    peaks, cppPeak, neoPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
     weatherLog, crosscheck, causes,
     _feUpdatedAt: fe.updatedAt, _cppUpdatedAt: cppBlock.updatedAt
