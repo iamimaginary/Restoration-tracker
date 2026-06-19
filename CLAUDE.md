@@ -32,16 +32,17 @@ Every source adapter returns exactly this (see `adapters/schema.mjs`, the valida
 
 `out` = customers without power, clamped to `[0, served]`.
 
-## Markets
+## Market (this app serves one: NE Ohio)
 
-A market is one file: `markets/<id>.json` (see `markets/neo-ohio.json`). It holds the county scope,
+The market is defined by a single config file: `markets/neo-ohio.json`. It holds the county scope,
 geo/weather coords (incl. `weather.alertArea`, the NWS state code), and the source list (adapter +
-per-source config). The collector picks the market via the `MARKET` env var (default `neo-ohio`).
-**Adding a market = adding one JSON file**, provided its sources use adapters that already exist.
+per-source config). The collector reads it via the `MARKET` env var — and `neo-ohio` is the only
+market here.
 
-Proven: `markets/pennsylvania.json` is a full second market (FirstEnergy PA — same `kubra` adapter,
-a different StormCenter view, no CPP). It runs end-to-end on the live feed and reconciles, with zero
-engine changes — the template for every next market.
+This app is **NE-Ohio-only by design.** The config-driven structure exists for agent-maintainability
+(clean adapters, golden tests, reconciliation), **not** to host multiple regions in one app. A different
+region is a **separate deployment** — this app copied with its own `markets/<id>.json` — not another
+market added here. Do not add other markets to this repo.
 
 ## Adapters
 
