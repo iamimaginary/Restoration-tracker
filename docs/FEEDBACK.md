@@ -19,37 +19,13 @@ the user saw), `view`, `url/hash`, `appVersion`, `ua`, `ts`. That bundle is the 
 with `snapshotAt` you can pull the exact data the user was looking at and reproduce their complaint
 deterministically. Without it, "it's wrong" is unactionable — so never drop it.
 
-## Intake (serverless stub)
+## Intake (serverless)
 
 The widget POSTs JSON to `window.FEEDBACK_ENDPOINT` when set (otherwise it falls back to a prefilled
-GitHub issue the user submits themselves). Production endpoint = a tiny serverless function. Cloudflare
-Worker sketch:
-
-```js
-export default {
-  async fetch(req, env) {
-    if (req.method !== "POST") return new Response("no", { status: 405 });
-    const f = await req.json();
-    const message = String(f.message || "").slice(0, 4000);
-    // 1) SANITIZE — never let raw PII into the public repo. Keep email out of the issue body;
-    //    store it (if present) in a PRIVATE place keyed by issue id for replies.
-    const piiStripped = message.replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, "[email]")
-                               .replace(/\b\d{1,5}\s+[A-Za-z0-9.\s]{3,40}\b(st|street|ave|rd|road|dr|drive|ln|lane|blvd)\b/gi, "[address]");
-    const ctx = { market: f.market, snapshotAt: f.snapshotAt, view: f.view, appVersion: f.appVersion, hash: f.hash };
-    // 2) rate-limit + spam-filter here (env-backed). 3) create the issue:
-    await fetch(`https://api.github.com/repos/${env.REPO}/issues`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${env.GH_TOKEN}`, "User-Agent": "feedback-intake", Accept: "application/vnd.github+json" },
-      body: JSON.stringify({
-        title: `[feedback] ${piiStripped.slice(0, 60)}`,
-        labels: ["feedback", "triage"],
-        body: `${piiStripped}\n\n---\nContext:\n\`\`\`json\n${JSON.stringify(ctx, null, 2)}\n\`\`\``
-      })
-    });
-    return new Response("ok");
-  }
-};
-```
+GitHub issue the user submits themselves). The production endpoint is a deployable Cloudflare Worker —
+**`workers/feedback-intake.mjs`** (deploy + wiring: `workers/README.md`). It sanitizes (strips PII),
+rate-limits, spam-filters, and opens a `feedback`+`triage` issue; it's the only thing holding the GitHub
+token, and keeps any submitted email private (KV), out of the public repo.
 
 > When you set `FEEDBACK_ENDPOINT`, also add its origin to the `connect-src` of the CSP in `index.html`,
 > or the browser will block the POST.
@@ -73,8 +49,11 @@ export default {
 
 ## Label scheme
 
-`triage` (intake, unprocessed) · `bug` · `data-wrong` · `feature` · `market-request` · `spam` ·
-`invalid` · `by-design` · `duplicate` · `needs-human` · `wont-fix`
+Defined declaratively in **`.github/labels.yml`** (source of truth) and synced to the repo by
+`.github/workflows/labels.yml`. Edit there, not in the GitHub UI:
+
+`feedback` (widget source) · `triage` (unprocessed) · `bug` · `data-wrong` · `feature` ·
+`market-request` · `spam` · `invalid` · `by-design` · `duplicate` · `needs-human` · `wont-fix`
 
 ## Demand signal
 

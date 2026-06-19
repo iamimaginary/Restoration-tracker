@@ -120,4 +120,7 @@ scripts/test_adapters.mjs    golden-test runner
 scripts/check_reconciliation.mjs  reconciliation gate
 index.html                   the static app + feedback widget
 docs/FEEDBACK.md             feedback intake, triage rules, labels
+workers/feedback-intake.mjs  serverless feedback intake (sanitize → labeled issue)
+.github/labels.yml           declarative label scheme (synced by workflows/labels.yml)
+.github/workflows/           collect (data), checks (PR gate), labels (sync)
 ```

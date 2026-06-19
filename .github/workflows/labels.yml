@@ -1,0 +1,23 @@
+# Keep the repo's labels in sync with .github/labels.yml (the feedback-pipeline label scheme).
+# Runs when the label config changes, or on demand. Additive — does not delete labels not listed.
+name: labels
+
+on:
+  push:
+    paths:
+      - ".github/labels.yml"
+      - ".github/workflows/labels.yml"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml

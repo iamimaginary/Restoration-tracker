@@ -1,0 +1,38 @@
+# Declarative label scheme for the feedback → agent-task pipeline (see docs/FEEDBACK.md).
+# Synced to the repo by .github/workflows/labels.yml. Source of truth — edit here, not in the UI.
+- name: feedback
+  color: "1f6feb"
+  description: "Came in via the in-app feedback widget"
+- name: triage
+  color: "fbca04"
+  description: "Intake, not yet classified — an agent picks these up"
+- name: bug
+  color: "d73a4a"
+  description: "App misbehaves (crash, render, broken logic)"
+- name: data-wrong
+  color: "e99695"
+  description: "A value is disputed — reproduce against the snapshot before believing it"
+- name: feature
+  color: "0e8a16"
+  description: "Product request / enhancement"
+- name: market-request
+  color: "006b75"
+  description: "Add my city / utility — feeds the adapter roadmap"
+- name: spam
+  color: "555555"
+  description: "Spam — close"
+- name: invalid
+  color: "cccccc"
+  description: "Not actionable / not a real report"
+- name: by-design
+  color: "5319e7"
+  description: "Working as intended — explained and closed (do NOT change correct data)"
+- name: duplicate
+  color: "cfd3d7"
+  description: "Already tracked elsewhere"
+- name: needs-human
+  color: "b60205"
+  description: "Ambiguous / legal / product call — escalated to the maintainer"
+- name: wont-fix
+  color: "ffffff"
+  description: "Acknowledged but won't be addressed"
