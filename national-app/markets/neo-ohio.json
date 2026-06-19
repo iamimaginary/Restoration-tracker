@@ -1,0 +1,39 @@
+{
+  "id": "neo-ohio",
+  "label": "Northeast Ohio",
+  "timezone": "America/New_York",
+  "weather": { "lat": 41.50, "lon": -81.69, "alertArea": "OH" },
+  "geo": {
+    "countiesGeoJson": "oh-counties.geojson",
+    "bbox": [42.1123, -79.7766, 39.0936, -85.1123]
+  },
+  "scope": {
+    "counties": ["CUYAHOGA", "LAKE", "GEAUGA", "ASHTABULA", "LORAIN", "MEDINA", "SUMMIT", "PORTAGE", "STARK", "WAYNE", "TRUMBULL", "MAHONING", "COLUMBIANA"]
+  },
+  "sources": [
+    {
+      "id": "fe",
+      "name": "FirstEnergy",
+      "adapter": "kubra",
+      "required": true,
+      "poweroutageId": "121",
+      "config": {
+        "instance": "6c715f0e-bbec-465f-98cc-0b81623744be",
+        "view": "db9c3f02-0a06-4672-a357-0f676eb75bfa",
+        "referer": "https://outages-oh.firstenergycorp.com/"
+      }
+    },
+    {
+      "id": "cpp",
+      "name": "Cleveland Public Power",
+      "adapter": "arcgis-cpp",
+      "required": false,
+      "poweroutageId": "1468",
+      "config": {
+        "webmap": "88719296c67e4874b0bdd2abd91658b2",
+        "featureServer": "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/CPPFeederAreas_BufferXMBuff100v3/FeatureServer/0"
+      }
+    }
+  ],
+  "reconciliation": { "tolerancePct": 15 }
+}

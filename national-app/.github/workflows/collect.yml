@@ -1,0 +1,43 @@
+# National collector — runs the SAME scripts/collect.mjs once per market (matrix), each writing its own
+# shard data/<market-id>.json to the tracker-data branch. Adding a market = adding it to the matrix
+# (and markets/registry.json). Requires collect.mjs's STATE_PATH to be per-market — see ASSEMBLY.md.
+name: collect
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # backstop; an external pinger (repository_dispatch) gives steadier cadence
+  workflow_dispatch:
+  repository_dispatch:
+
+concurrency:
+  group: collect-${{ github.event.client_payload.market || 'all' }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8          # a hung fetch self-clears instead of holding the slot for hours
+    strategy:
+      fail-fast: false          # one market's failure must not stop the others
+      matrix:
+        market: [neo-ohio, pennsylvania]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main             # the code branch
+          fetch-depth: 1
+      - name: Mount the data branch
+        run: |
+          git fetch origin tracker-data --depth=1 || true
+          git worktree add -B tracker-data data origin/tracker-data 2>/dev/null || git worktree add -B tracker-data data
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Collect ${{ matrix.market }}
+        run: MARKET=${{ matrix.market }} node scripts/collect.mjs   # writes data/${{ matrix.market }}.json
+      - name: Commit shard
+        run: |
+          cd data
+          git add -A
+          git -c user.name=outage-bot -c user.email=bot@users.noreply.github.com commit -m "data: ${{ matrix.market }} $(date -u +%FT%TZ)" || echo "no change"
+          for i in 1 2 3 4; do git push origin tracker-data && break || sleep $((2**i)); done

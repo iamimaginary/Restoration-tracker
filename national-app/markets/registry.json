@@ -1,0 +1,30 @@
+{
+  "_note": "Index of all markets for locale routing. The client loads this once: it populates the locale picker and maps a resolved locale (state + county) to the market(s) that serve it. `dataUrl` is where that market's collected shard lives. Adding a market = a markets/<id>.json + an entry here (+ a collect matrix entry).",
+  "version": 1,
+  "markets": [
+    {
+      "id": "neo-ohio",
+      "label": "Northeast Ohio",
+      "utilities": ["FirstEnergy", "Cleveland Public Power"],
+      "status": "live",
+      "coverage": {
+        "state": "OH",
+        "counties": ["CUYAHOGA", "LAKE", "GEAUGA", "ASHTABULA", "LORAIN", "MEDINA", "SUMMIT", "PORTAGE", "STARK", "WAYNE", "TRUMBULL", "MAHONING", "COLUMBIANA"]
+      },
+      "config": "markets/neo-ohio.json",
+      "dataUrl": "data/neo-ohio.json"
+    },
+    {
+      "id": "pennsylvania",
+      "label": "FirstEnergy Pennsylvania",
+      "utilities": ["Met-Ed", "Penelec", "Penn Power", "West Penn Power"],
+      "status": "beta",
+      "coverage": {
+        "state": "PA",
+        "counties": ["ADAMS", "ALLEGHENY", "ARMSTRONG", "BEAVER", "BEDFORD", "BERKS", "BLAIR", "BRADFORD", "BUCKS", "BUTLER", "CAMBRIA", "CAMERON", "CENTRE", "CHESTER", "CLARION", "CLEARFIELD", "CLINTON", "CRAWFORD", "CUMBERLAND", "DAUPHIN", "ELK", "ERIE", "FAYETTE", "FOREST", "FRANKLIN", "FULTON", "GREENE", "HUNTINGDON", "INDIANA", "JEFFERSON", "JUNIATA", "LANCASTER", "LAWRENCE", "LEBANON", "LEHIGH", "LYCOMING", "MCKEAN", "MERCER", "MIFFLIN", "MONROE", "MONTGOMERY", "NORTHAMPTON", "PERRY", "PIKE", "POTTER", "SOMERSET", "SULLIVAN", "SUSQUEHANNA", "TIOGA", "VENANGO", "WARREN", "WASHINGTON", "WAYNE", "WESTMORELAND", "WYOMING", "YORK"]
+      },
+      "config": "markets/pennsylvania.json",
+      "dataUrl": "data/pennsylvania.json"
+    }
+  ]
+}

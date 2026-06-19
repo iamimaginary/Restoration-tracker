@@ -1,0 +1,28 @@
+{
+  "id": "pennsylvania",
+  "label": "FirstEnergy Pennsylvania",
+  "timezone": "America/New_York",
+  "weather": { "lat": 40.27, "lon": -76.88, "alertArea": "PA" },
+  "geo": {
+    "countiesGeoJson": null,
+    "bbox": [42.27, -74.69, 39.72, -80.52]
+  },
+  "scope": {
+    "counties": ["ADAMS", "ALLEGHENY", "ARMSTRONG", "BEAVER", "BEDFORD", "BERKS", "BLAIR", "BRADFORD", "BUCKS", "BUTLER", "CAMBRIA", "CAMERON", "CENTRE", "CHESTER", "CLARION", "CLEARFIELD", "CLINTON", "CRAWFORD", "CUMBERLAND", "DAUPHIN", "ELK", "ERIE", "FAYETTE", "FOREST", "FRANKLIN", "FULTON", "GREENE", "HUNTINGDON", "INDIANA", "JEFFERSON", "JUNIATA", "LANCASTER", "LAWRENCE", "LEBANON", "LEHIGH", "LYCOMING", "MCKEAN", "MERCER", "MIFFLIN", "MONROE", "MONTGOMERY", "NORTHAMPTON", "PERRY", "PIKE", "POTTER", "SOMERSET", "SULLIVAN", "SUSQUEHANNA", "TIOGA", "VENANGO", "WARREN", "WASHINGTON", "WAYNE", "WESTMORELAND", "WYOMING", "YORK"]
+  },
+  "sources": [
+    {
+      "id": "fe",
+      "name": "FirstEnergy (Met-Ed / Penelec / Penn Power / West Penn Power)",
+      "adapter": "kubra",
+      "required": true,
+      "poweroutageId": null,
+      "config": {
+        "instance": "6c715f0e-bbec-465f-98cc-0b81623744be",
+        "view": "8587e451-e258-4692-b5e8-28010506d51a",
+        "referer": "https://outages-pa.firstenergycorp.com/"
+      }
+    }
+  ],
+  "reconciliation": { "tolerancePct": 15 }
+}
