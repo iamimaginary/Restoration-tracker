@@ -35,9 +35,13 @@ Every source adapter returns exactly this (see `adapters/schema.mjs`, the valida
 ## Markets
 
 A market is one file: `markets/<id>.json` (see `markets/neo-ohio.json`). It holds the county scope,
-geo/weather coords, and the source list (adapter + per-source config). The collector picks the market
-via the `MARKET` env var (default `neo-ohio`). **Adding a market = adding one JSON file**, provided its
-sources use adapters that already exist.
+geo/weather coords (incl. `weather.alertArea`, the NWS state code), and the source list (adapter +
+per-source config). The collector picks the market via the `MARKET` env var (default `neo-ohio`).
+**Adding a market = adding one JSON file**, provided its sources use adapters that already exist.
+
+Proven: `markets/pennsylvania.json` is a full second market (FirstEnergy PA — same `kubra` adapter,
+a different StormCenter view, no CPP). It runs end-to-end on the live feed and reconciles, with zero
+engine changes — the template for every next market.
 
 ## Adapters
 

@@ -257,7 +257,7 @@ async function fetchCPP(){
 // Active NWS weather alerts for Ohio, mapped to our counties. Used to tell whether
 // an outage coincides with a weather event (vs. a blue-sky / infrastructure outage).
 async function fetchWeather(){
-  const data = await jget("https://api.weather.gov/alerts/active?area=OH", { "Accept": "application/geo+json" });
+  const data = await jget(`https://api.weather.gov/alerts/active?area=${market.weather.alertArea}`, { "Accept": "application/geo+json" });
   const counties = {};                       // COUNTY -> [event names]
   const alerts = [];
   for(const f of (data.features || [])){
@@ -294,10 +294,12 @@ function loadPrev(){
     process.exit(ageMin > STALE_ALERT_MIN ? 1 : 0);
   }
 
-  // CPP is optional; on failure reuse the last good CPP block.
-  let cpp;
-  try { cpp = await fetchCPP(); }
-  catch(e){ console.error("CPP fetch failed, reusing previous:", e.message); cpp = null; }
+  // CPP is optional and market-specific; skip entirely if the market has no arcgis-cpp source.
+  let cpp = null;
+  if(cppSource){
+    try { cpp = await fetchCPP(); }
+    catch(e){ console.error("CPP fetch failed, reusing previous:", e.message); cpp = null; }
+  }
 
   // Weather is optional context; on failure assume no known alert (won't false-flag blue-sky).
   let weather = { counties:{}, alerts:[], weatherSet:new Set() };
@@ -635,7 +637,7 @@ function loadPrev(){
     schema: 1, collectedAt: now,
     activeStorm, belowSince, stormLog,
     fe: { updatedAt: fe.updatedAt, counties: fe.counties },
-    cpp: cppBlock,
+    cpp: cppSource ? cppBlock : null,   // markets with no arcgis-cpp source emit no CPP block
     peaks, cppPeak, neoPeak, history, countyHistory, cityHistory, cppHistory, reliability, etrStats, etrCity, relDay, relTrend,
     weather: { updatedAt: now, counties: weather.counties || {}, alerts: weather.alerts || [] },
     weatherLog, crosscheck, causes,

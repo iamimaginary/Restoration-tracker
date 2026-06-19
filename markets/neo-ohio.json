@@ -2,7 +2,7 @@
   "id": "neo-ohio",
   "label": "Northeast Ohio",
   "timezone": "America/New_York",
-  "weather": { "lat": 41.50, "lon": -81.69 },
+  "weather": { "lat": 41.50, "lon": -81.69, "alertArea": "OH" },
   "geo": {
     "countiesGeoJson": "oh-counties.geojson",
     "bbox": [42.1123, -79.7766, 39.0936, -85.1123]
