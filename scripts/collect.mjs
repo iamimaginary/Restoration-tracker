@@ -94,7 +94,7 @@ async function jget(url, extraHeaders = {}){
   let lastErr;
   for(let attempt = 1; attempt <= 4; attempt++){
     try {
-      const r = await fetch(url, { headers });
+      const r = await fetch(url, { headers, signal: AbortSignal.timeout(15000) });   // never hang on a stalled connection
       if(r.ok) return await r.json();
       lastErr = new Error(url.split("/")[2] + " " + r.status);
       // retry on 403/429/5xx (transient/bot-protection); give up on other 4xx
@@ -151,7 +151,7 @@ async function fetchCauses(tmpl, totalCust){
   if(!tmpl || !/\{qkh\}/.test(tmpl)) throw new Error("no cluster data path");
   const url = q => `${KB}/${tmpl.replace("{qkh}", q.slice(-3).split("").reverse().join(""))}/public/cluster-5/${q}.json`;
   const tileGet = async q => {
-    try { const r = await fetch(url(q), { headers: { "User-Agent": UA, "Accept": "*/*", "Referer": "https://kubra.io/" } });
+    try { const r = await fetch(url(q), { headers: { "User-Agent": UA, "Accept": "*/*", "Referer": "https://kubra.io/" }, signal: AbortSignal.timeout(15000) });
       if(!r.ok) return []; const j = await r.json(); return Array.isArray(j.file_data) ? j.file_data : []; }
     catch(e){ return []; }
   };

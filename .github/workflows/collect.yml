@@ -22,6 +22,9 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    # a normal run takes <2 min; cap it so a hung fetch can't hold the (non-cancelling)
+    # concurrency slot for hours and stall data collection behind it.
+    timeout-minutes: 8
     steps:
       - name: Checkout code branch
         uses: actions/checkout@v4
