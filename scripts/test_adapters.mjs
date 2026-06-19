@@ -6,14 +6,17 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { validateCanonical } from "../adapters/schema.mjs";
-import { parseKubraReport } from "../adapters/kubra.mjs";
+import * as kubra from "../adapters/kubra.mjs";
+import * as arcgisCpp from "../adapters/arcgis-cpp.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const FIX = join(ROOT, "adapters", "fixtures");
 
-// adapter id -> pure parser. Add a line here when you add an adapter.
-const PARSERS = {
-  kubra: parseKubraReport
+// adapter id -> { module, defaultFn, canonical }. `canonical: true` adapters must also pass the schema.
+// A fixture may set "fn" to pick which exported parser to test (adapters with multiple parse steps).
+const ADAPTERS = {
+  kubra:        { mod: kubra,     defaultFn: "parseKubraReport", canonical: true },
+  "arcgis-cpp": { mod: arcgisCpp, defaultFn: "parseCppFeatures", canonical: false }
 };
 
 function deepEqual(a, b, path = "") {
@@ -34,17 +37,18 @@ let total = 0, failed = 0;
 if (!existsSync(FIX)) { console.log("no adapters/fixtures — nothing to test"); process.exit(0); }
 
 for (const adapter of readdirSync(FIX)) {
-  const parser = PARSERS[adapter];
+  const cfg = ADAPTERS[adapter];
   const dir = join(FIX, adapter);
   for (const f of readdirSync(dir).filter((x) => x.endsWith(".json"))) {
     total++;
     const label = `${adapter}/${f}`;
-    if (!parser) { failed++; console.error(`✗ ${label}: no parser registered for adapter "${adapter}"`); continue; }
+    if (!cfg) { failed++; console.error(`✗ ${label}: no adapter registered for "${adapter}"`); continue; }
     try {
-      const { raw, expected } = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      const { raw, expected, fn } = JSON.parse(readFileSync(join(dir, f), "utf8"));
+      const parser = cfg.mod[fn || cfg.defaultFn];
+      if (typeof parser !== "function") { failed++; console.error(`✗ ${label}: no exported fn "${fn || cfg.defaultFn}"`); continue; }
       const got = parser(raw);
-      const v = validateCanonical(got);
-      if (!v.ok) { failed++; console.error(`✗ ${label}: schema invalid →\n   ${v.errors.join("\n   ")}`); continue; }
+      if (cfg.canonical) { const v = validateCanonical(got); if (!v.ok) { failed++; console.error(`✗ ${label}: schema invalid →\n   ${v.errors.join("\n   ")}`); continue; } }
       if (expected) { const d = deepEqual(got, expected); if (d) { failed++; console.error(`✗ ${label}: output mismatch at ${d}`); continue; } }
       console.log(`✓ ${label}`);
     } catch (e) {

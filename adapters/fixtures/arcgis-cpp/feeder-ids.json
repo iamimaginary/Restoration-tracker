@@ -1,0 +1,11 @@
+{
+  "_note": "Golden fixture for parseOutageFeederIds — extracts distinct feeder ids from the CPP webmap's 'Approximate Outage' layer definitionExpression. `fn` selects which exported parser the runner calls.",
+  "fn": "parseOutageFeederIds",
+  "raw": {
+    "operationalLayers": [
+      { "title": "Base Map", "layerDefinition": { "definitionExpression": "1=1" } },
+      { "title": "Approximate Outage Areas", "layerDefinition": { "definitionExpression": "FEEDER_ID1 IN ('F-101','F-102',' F-102 ','F-103')" } }
+    ]
+  },
+  "expected": ["F-101", "F-102", "F-103"]
+}

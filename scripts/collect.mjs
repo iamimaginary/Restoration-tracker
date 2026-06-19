@@ -6,6 +6,7 @@
 // starts fresh). There is no automatic time-based reset.
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { parseKubraReport } from "../adapters/kubra.mjs";
+import { parseOutageFeederIds, parseCppFeatures } from "../adapters/arcgis-cpp.mjs";
 
 // Cross-check the headline numbers two ways:
 //  • internal (always available): our county-sum vs FirstEnergy's OWN published Ohio
@@ -237,21 +238,17 @@ async function fetchWind(){
 
 async function fetchCPP(){
   const data = await jget(`https://www.arcgis.com/sharing/rest/content/items/${CPP_WEBMAP}/data?f=json`);
-  const layer = (data.operationalLayers||[]).find(l=>/Approximate Outage/i.test(l.title||""));
-  const expr  = (layer && layer.layerDefinition && layer.layerDefinition.definitionExpression) || "";
-  const ids = [...new Set((expr.match(/'([^']*)'/g)||[]).map(s=>s.slice(1,-1).trim()).filter(Boolean))];
-  let features = [];
+  const ids = parseOutageFeederIds(data);   // adapters/arcgis-cpp.mjs (golden-tested)
+  let parsed = { accounts: 0, feeders: [], features: [] };
   if(ids.length){
     const inList = ids.map(s=>`'${s.replace(/'/g,"''")}'`).join(",");
     const q = `where=${encodeURIComponent("FEEDER_ID1 IN ("+inList+")")}&outFields=SUBSTATION,FEEDER_ID1,COUNT_,Label_Count&returnGeometry=true&outSR=4326&f=geojson`;
     const gj = await jget(`${CPP_FS0}/query?${q}`);
-    features = (gj.features||[]).filter(f=>f && f.geometry && f.properties);
+    parsed = parseCppFeatures(gj);
   }
   let updatedAt = Date.now();
   try { const m = await jget(`https://www.arcgis.com/sharing/rest/content/items/${CPP_WEBMAP}?f=json`); if(m && m.modified) updatedAt = m.modified; } catch(e){}
-  const accounts = features.reduce((s,f)=> s + (Number(f.properties.COUNT_)||0), 0);
-  const feeders  = [...new Set(features.map(f=>String(f.properties.FEEDER_ID1||"").trim()).filter(Boolean))];
-  return { updatedAt, accounts, feeders, features };
+  return { updatedAt, ...parsed };
 }
 
 // Active NWS weather alerts for Ohio, mapped to our counties. Used to tell whether

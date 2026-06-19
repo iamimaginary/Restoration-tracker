@@ -1,0 +1,20 @@
+{
+  "_note": "Golden fixture for parseCppFeatures — sums customer COUNT_ over valid features (geometry + properties required), dedupes feeders. Features without geometry are dropped.",
+  "fn": "parseCppFeatures",
+  "raw": {
+    "features": [
+      { "geometry": { "type": "Point", "coordinates": [-81.70, 41.50] }, "properties": { "SUBSTATION": "SUB1", "FEEDER_ID1": "F-101", "COUNT_": 120, "Label_Count": 120 } },
+      { "geometry": { "type": "Point", "coordinates": [-81.65, 41.48] }, "properties": { "SUBSTATION": "SUB1", "FEEDER_ID1": "F-102", "COUNT_": 80 } },
+      { "geometry": null, "properties": { "FEEDER_ID1": "F-103", "COUNT_": 50 } },
+      { "properties": { "FEEDER_ID1": "F-101", "COUNT_": 30 } }
+    ]
+  },
+  "expected": {
+    "accounts": 200,
+    "feeders": ["F-101", "F-102"],
+    "features": [
+      { "geometry": { "type": "Point", "coordinates": [-81.70, 41.50] }, "properties": { "SUBSTATION": "SUB1", "FEEDER_ID1": "F-101", "COUNT_": 120, "Label_Count": 120 } },
+      { "geometry": { "type": "Point", "coordinates": [-81.65, 41.48] }, "properties": { "SUBSTATION": "SUB1", "FEEDER_ID1": "F-102", "COUNT_": 80 } }
+    ]
+  }
+}
