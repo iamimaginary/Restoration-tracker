@@ -1439,7 +1439,7 @@ function renderStormLog(){
           ${s.replayId?`<button class="btn pin-mini" type="button" data-replay="${esc(String(s.replayId))}">▶ Replay on map</button>`:""}
           <button class="btn pin-mini" type="button" data-storm="${i}">Share</button></div>
         <div class="sl-stats">${chips.map(c=>`<span>${c}</span>`).join("")}</div>
-        <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${peakAtTxt?` · peak${peakAtTxt}`:""}${restore.length?` · ${restore.join(" · ")}`:""}</div>
+        <div class="sl-meta">lasted <b>~${esc(durStr(s.durationHrs||0))}</b>${peakAtTxt?` · peak${peakAtTxt}`:""}${restore.length?` · ${restore.join(" · ")}`:""}${s.etaMaeHrs!=null?` · <span title="median absolute error of the app's restoration ETA, scored against what actually happened during this storm">est. ETA error ~${esc(durStr(s.etaMaeHrs))}</span>`:""}</div>
         ${line2?`<div class="sl-meta">${line2}</div>`:""}
         <div class="sl-meta">${wxClass} · FirstEnergy customers out (NE Ohio) ${confTag('experimental')}</div>
         ${(s.curve&&s.curve.length>=2)?`<canvas class="sl-curve" data-i="${i}" title="customers out over the event"></canvas>`:""}

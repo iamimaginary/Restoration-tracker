@@ -76,6 +76,36 @@ function downsample(series, n){
   return out;
 }
 
+// Self-score the deployed ETA estimator on a completed storm's own trajectory: walk forward from
+// the peak and, at each point still above the 90%-restored target, predict hours-to-90% and compare
+// to what actually happened. Returns the median absolute error (h), or null if too short to score.
+// Mirrors index.html rateInfo: 2-point rate over a ~2.5h window, holding guard, linear out/rate with a
+// gated (peak>=1000, past halfway) bounded (<=2x) tail-slowdown correction. Keep in sync if that changes.
+function scoreEta(series, peak){
+  if(!series || series.length < 6 || !(peak > 0)) return null;
+  const target = peak * 0.10, W = 150*60*1000;
+  let pk = 0; for(let i=0;i<series.length;i++) if(series[i].out >= series[pk].out) pk = i;
+  const errs = [];
+  for(let i=pk+1;i<series.length;i++){
+    const out = series[i].out; if(out <= target) continue;
+    let j=-1; for(let k=i+1;k<series.length;k++){ if(series[k].out <= target){ j=k; break; } }
+    if(j<0) break;                                              // 90% never reached afterward → no ground truth
+    const realized = (series[j].t - series[i].t)/3600000;
+    let s=null; for(let q=0;q<=i;q++){ if(series[q].t >= series[i].t - W){ s=series[q]; break; } }
+    if(!s || s===series[i]) s = series[i-1]; if(!s) continue;
+    const hrs = (series[i].t - s.t)/3600000; if(hrs<=0) continue;
+    const rate = (s.out - out)/hrs;
+    if(!(rate > Math.max(5, out*0.01))) continue;               // holding guard → estimator shows nothing
+    const f = Math.max(0, Math.min(1, (peak-out)/peak));
+    const decel = peak >= 1000 ? 1 + Math.min(1, Math.max(0, (f-0.5)/0.5)) : 1;
+    const pred = ((out - target)/rate) * decel;
+    errs.push(Math.abs(pred - realized));
+  }
+  if(!errs.length) return null;
+  errs.sort((a,b)=>a-b);
+  return Math.round(errs[Math.floor(errs.length/2)] * 10) / 10;
+}
+
 // meteorological season + occurrence key. Winter (Dec–Feb) is keyed to the December year,
 // so a single occurrence (e.g. "winter-2026") spans the calendar boundary.
 function seasonOf(ms){
@@ -485,8 +515,9 @@ function loadPrev(){
   const stormLog  = (prev.stormLog || []).slice();
   let closed = false;
 
-  // peak of the current storm (NE Ohio total) from its accumulated history
-  const peakTotal = history.reduce((m,p)=> Math.max(m, p.out), 0);
+  // peak of the current storm (NE Ohio total). Prefer the live-tracked running peak (robust to
+  // history capping on long events) and fall back to the max over the retained history.
+  const peakTotal = Math.max((activeStorm && activeStorm.peak) || 0, history.reduce((m,p)=> Math.max(m, p.out), 0));
   const restoredLevel = Math.max(STORM_END_FLOOR, Math.round(peakTotal * STORM_END_PCT));
 
   if(!activeStorm){
@@ -498,7 +529,7 @@ function loadPrev(){
       if(now - belowSince >= STORM_END_SUSTAIN_MS){
         // storm is over: log a summary, then clear everything for the next storm
         if(peakTotal >= STORM_MIN_PEAK){
-          const peakPt = history.find(p=>p.out === peakTotal) || { t: activeStorm.startedAt };
+          const peakPt = history.find(p=>p.out === peakTotal) || { t: (activeStorm.peakAt || activeStorm.startedAt) };
           const topCounties = Object.entries(peaks)
             .filter(([k]) => NEO.has(k))
             .map(([name, peak]) => ({ name, peak }))
@@ -539,7 +570,10 @@ function loadPrev(){
             durationHrs: Math.round((belowSince - activeStorm.startedAt) / 3600000 * 10) / 10,
             peakTotal, peakAt: peakPt.t, topCounties,
             custHrsLost: Math.round(custHrsLost),
-            toHalfHrs: milestone(0.5), to90Hrs: milestone(0.10),
+            // prefer milestones tracked live during the storm (survive history capping); fall back to a scan
+            toHalfHrs: (activeStorm.ms && activeStorm.ms.half != null) ? activeStorm.ms.half : milestone(0.5),
+            to90Hrs:   (activeStorm.ms && activeStorm.ms.p90  != null) ? activeStorm.ms.p90  : milestone(0.10),
+            etaMaeHrs: scoreEta(history, peakTotal),        // real-world accuracy of the app's ETA estimator on this storm
             peakCPP: cppPeak || 0,
             nOutPeak: activeStorm.nOutPeak || 0,
             maxGustMph: maxGust ? Math.round(maxGust) : null,
@@ -566,9 +600,18 @@ function loadPrev(){
     activeStorm.nOutPeak = Math.max(activeStorm.nOutPeak || 0, fe.official.nOut || 0);
     if(totalAll >= (activeStorm.peak || 0)){
       activeStorm.peak = totalAll; activeStorm.peakAt = now;
+      activeStorm.ms = {};                       // new high-water mark → milestones are timed from here
       if(causes && causes.byCause && causes.knownCust > 0){
         activeStorm.peakCauses = Object.fromEntries(Object.entries(causes.byCause).sort((a,b)=>(b[1].cust||0)-(a[1].cust||0)).slice(0,6));
       }
+    }
+    // restoration milestones tracked live (hours from peak to 50% / 90% restored), so they survive
+    // history capping on long events and always populate the historical-pace prior.
+    if(activeStorm.peak > 0){
+      activeStorm.ms = activeStorm.ms || {};
+      const hFromPeak = Math.round((now - activeStorm.peakAt) / 360000) / 10;
+      if(activeStorm.ms.half == null && totalAll <= activeStorm.peak * 0.5)  activeStorm.ms.half = hFromPeak;
+      if(activeStorm.ms.p90  == null && totalAll <= activeStorm.peak * 0.10) activeStorm.ms.p90  = hFromPeak;
     }
   }
 
