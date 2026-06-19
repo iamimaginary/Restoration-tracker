@@ -58,6 +58,11 @@ const STORM_START = 2000, STORM_END_FLOOR = 500, STORM_END_PCT = 0.02;
 const STORM_END_SUSTAIN_MS = 3 * 60 * 60 * 1000;   // 3 h at/under restored level
 const STORM_MIN_PEAK = 5000;                        // don't log trivial blips
 const REL_DT_CAP_MS = 30 * 60 * 1000;               // cap per-reading time weight (guards against collection gaps)
+// within-season recency weighting: each season bucket is an exponentially-weighted moving average,
+// so the grade keeps evolving all season (recent weeks dominate; old events fade) instead of freezing
+// into a season-to-date cumulative average. ~21-day half-life ⇒ reflects roughly "the last few weeks".
+const REL_HALFLIFE_DAYS = 21;
+const REL_TAU_HRS = REL_HALFLIFE_DAYS * 24 / Math.LN2;
 
 const centroid = b => (b && b.length === 4) ? [(b[1]+b[3])/2, (b[0]+b[2])/2] : null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -347,7 +352,7 @@ function loadPrev(){
   // meteorological season + occurrence (winter spans Dec–Feb, keyed to the December year),
   // so reliability can be reported per season instead of one ever-ratcheting lifetime average.
   const cur = seasonOf(now);
-  const blankSeason = occ => ({ occ, outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, peakFrac:0, events:0, outHrsBlue:0, outTimeBlueHrs:0, blueEvents:0 });
+  const blankSeason = occ => ({ occ, outHrs:0, custHrs:0, outTimeHrs:0, timeHrs:0, obsHrs:0, peakFrac:0, events:0, outHrsBlue:0, outTimeBlueHrs:0, blueEvents:0 });
   const reliability = structuredClone(prev.reliability || {});
   fe.counties.forEach(c => {
     const blueCtx = !stormContext && !recentWxCounties.has(c.name);   // true ⇒ no weather/storm excuse
@@ -365,19 +370,26 @@ function loadPrev(){
       if(!r.seasons){ r.seasons = { [cur.s]: { occ:cur.key, outHrs:r.outHrs||0, custHrs:r.custHrs||0, outTimeHrs:r.outTimeHrs||0, timeHrs:r.timeHrs||0, peakFrac:r.peakFrac||0, events:r.events||0, outHrsBlue:r.outHrsBlue||0, outTimeBlueHrs:r.outTimeBlueHrs||0, blueEvents:r.blueEvents||0 } }; }
       let sb = r.seasons[cur.s];
       if(!sb || sb.occ !== cur.key) sb = r.seasons[cur.s] = blankSeason(cur.key);
+      if(sb.obsHrs == null) sb.obsHrs = sb.timeHrs || 0;   // elapsed observation time (not decayed; for "days so far")
       if(r.lastT){
         const dt = Math.min(now - r.lastT, REL_DT_CAP_MS) / 3600000;   // hours, capped
         if(dt > 0){
+          // lifetime accumulators stay cumulative; the season bucket is recency-weighted: decay its
+          // running totals by exp(-dt/τ) each cycle before adding this reading, so it tracks recent weeks.
+          const decay = Math.exp(-dt / REL_TAU_HRS);
+          sb.outHrs *= decay; sb.custHrs *= decay; sb.timeHrs *= decay;
+          sb.outTimeHrs *= decay; sb.outHrsBlue *= decay; sb.outTimeBlueHrs *= decay;
+          sb.peakFrac *= decay; sb.events *= decay; sb.blueEvents *= decay;
           r.outHrs  += s.out * dt;        sb.outHrs  += s.out * dt;
           r.custHrs += s.served * dt;     sb.custHrs += s.served * dt;
-          r.timeHrs += dt;                sb.timeHrs += dt;
+          r.timeHrs += dt;                sb.timeHrs += dt;      sb.obsHrs += dt;
           if(s.out > 0){
             r.outTimeHrs += dt;           sb.outTimeHrs += dt;
             if(blueCtx){ r.outHrsBlue += s.out * dt; r.outTimeBlueHrs += dt; sb.outHrsBlue += s.out * dt; sb.outTimeBlueHrs += dt; }
           }
         }
       }
-      if(s.out > 0 && !(r._prevOut > 0)){ r.events++; sb.events++; if(blueCtx){ r.blueEvents++; sb.blueEvents++; } }   // distinct onsets
+      if(s.out > 0 && !(r._prevOut > 0)){ r.events++; sb.events++; if(blueCtx){ r.blueEvents++; sb.blueEvents++; } }   // distinct onsets (season count fades via decay)
       r._prevOut = s.out;
       const frac = Math.min(1, s.out / s.served);
       if(frac > r.peakFrac) r.peakFrac = frac;

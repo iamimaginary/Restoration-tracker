@@ -1118,18 +1118,21 @@ function relScore(r){
   const b = (r.seasons && r.seasons[seas] && r.seasons[seas].custHrs > 0) ? r.seasons[seas] : r;
   const seasonal = b !== r;
   if(!(b.custHrs > 0)) return null;
-  const days = (b.timeHrs || 0) / 24;
-  if((b.timeHrs || 0) < REL_ENOUGH_HRS) return { building:true, days, season:seas, seasonal };
+  // season buckets are recency-weighted EWMAs (timeHrs is a decayed quantity that levels off);
+  // obsHrs is the true elapsed observation time this season, used for "days so far" + the ready gate.
+  const obsHrs = (b.obsHrs != null) ? b.obsHrs : (b.timeHrs || 0);
+  const days = obsHrs / 24;
+  if(obsHrs < REL_ENOUGH_HRS) return { building:true, days, season:seas, seasonal };
   const avail = (1 - b.outHrs / b.custHrs) * 100;
   return {
     availPct: avail,
     outPct: b.timeHrs > 0 ? (b.outTimeHrs / b.timeHrs) * 100 : 0,
     peakPct: (b.peakFrac || 0) * 100,
-    events: b.events || 0,
+    events: Math.round(b.events || 0),
     days, grade: relGrade(avail), season: seas, seasonal,
-    interruptions: b.events || 0,                                   // SAIFI-style: # of distinct outages
+    interruptions: Math.round(b.events || 0),                       // SAIFI-style: # of (recent) distinct outages
     avgOutageHrs: (b.events > 0) ? (b.outTimeHrs || 0) / b.events : 0,  // CAIDI-style: avg length per outage
-    blueEvents: b.blueEvents || 0,                                  // outages with no weather event
+    blueEvents: Math.round(b.blueEvents || 0),                      // outages with no weather event
     blueShare: b.outHrs > 0 ? ((b.outHrsBlue || 0) / b.outHrs) * 100 : 0
   };
 }
@@ -1377,10 +1380,11 @@ function renderUtility(){
   const agg = {};   // utility -> { outHrs, custHrs, days } — current-season buckets
   for(const r of Object.values(reliability)){
     const b = (r.seasons && r.seasons[seas] && r.seasons[seas].custHrs > 0) ? r.seasons[seas] : r;
-    if(!(b.custHrs > 0) || (b.timeHrs || 0) < REL_ENOUGH_HRS) continue;
+    const obsHrs = (b.obsHrs != null) ? b.obsHrs : (b.timeHrs || 0);
+    if(!(b.custHrs > 0) || obsHrs < REL_ENOUGH_HRS) continue;
     const util = NEO[r.county] || "FirstEnergy";
     const a = agg[util] || (agg[util] = { outHrs:0, custHrs:0, days:0 });
-    a.outHrs += b.outHrs; a.custHrs += b.custHrs; a.days = Math.max(a.days, (b.timeHrs||0)/24);
+    a.outHrs += b.outHrs; a.custHrs += b.custHrs; a.days = Math.max(a.days, obsHrs/24);
   }
   const rows = Object.entries(agg).filter(([,a]) => a.custHrs > 0)
     .map(([util,a]) => ({ util, avail:(1 - a.outHrs/a.custHrs)*100, days:a.days }))
