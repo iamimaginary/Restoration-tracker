@@ -1,0 +1,54 @@
+{
+  "_note": "Golden fixture for the Kübra adapter. `raw` is a minimal report.json in Kübra's shape; `expected` is the canonical output. Real failing payloads are auto-captured here in production so an agent can reproduce a schema break offline. Keep `expected` in sync if the contract changes.",
+  "raw": {
+    "file_data": {
+      "totals": { "cust_a": { "val": 1234 }, "cust_s": 500000, "n_out": 42 },
+      "areas": [
+        {
+          "areas": [
+            {
+              "name": "TESTCOUNTY",
+              "cust_s": 100000,
+              "cust_a": { "val": 500 },
+              "etr": null,
+              "gotoMap": { "bbox": [-81.9, 41.2, -81.4, 41.6] },
+              "areas": [
+                {
+                  "areaId": "A1",
+                  "name": "TESTCITY",
+                  "cust_s": 20000,
+                  "cust_a": { "val": 120 },
+                  "etr": null,
+                  "gotoMap": { "bbox": [-81.8, 41.4, -81.7, 41.5] }
+                },
+                {
+                  "name": "MASKEDCITY",
+                  "cust_s": 5000,
+                  "cust_a": { "val": 999999 },
+                  "etr": "2026-06-19T18:00:00Z",
+                  "gotoMap": { "bbox": [-81.6, 41.3, -81.5, 41.4] }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "expected": {
+    "official": { "out": 1234, "served": 500000, "nOut": 42 },
+    "areas": [
+      {
+        "name": "TESTCOUNTY",
+        "out": 500,
+        "served": 100000,
+        "etr": null,
+        "loc": [41.4, -81.65],
+        "subs": [
+          { "id": "A1", "name": "TESTCITY", "out": 120, "served": 20000, "etr": null, "loc": [41.45, -81.75] },
+          { "id": "TESTCOUNTY|MASKEDCITY", "name": "MASKEDCITY", "out": 5000, "served": 5000, "etr": "2026-06-19T18:00:00Z", "loc": [41.35, -81.55] }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,39 @@
+# Agent-maintenance gate. Every PR (adapter fixes, new markets, feedback-driven changes) must pass
+# these before merge — the deterministic guardrails that let a Claude agent ship a change safely:
+#   1. the collector still parses,
+#   2. every market config is valid,
+#   3. all adapter golden tests pass (the fix actually produces the canonical shape),
+#   4. the currently-deployed data still reconciles (catches a wrong-but-passing parse against live).
+name: checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Collector parses
+        run: node --check scripts/collect.mjs
+
+      - name: Market configs are valid
+        run: |
+          for f in markets/*.json; do
+            node -e "const m=require('./$f'); if(!m.id||!Array.isArray(m.sources)||!m.scope?.counties?.length) throw new Error('$f: missing id/sources/scope.counties'); console.log('ok $f')"
+          done
+
+      - name: Adapter golden tests
+        run: node scripts/test_adapters.mjs
+
+      - name: Reconciliation of deployed data (smoke)
+        run: node scripts/check_reconciliation.mjs "https://raw.githubusercontent.com/${{ github.repository }}/tracker-data/state.json"

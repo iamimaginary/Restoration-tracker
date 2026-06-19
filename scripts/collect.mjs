@@ -5,6 +5,7 @@
 // workflow with reset=true, which sets RESET — archives the current storm and
 // starts fresh). There is no automatic time-based reset.
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { parseKubraReport } from "../adapters/kubra.mjs";
 
 // Cross-check the headline numbers two ways:
 //  • internal (always available): our county-sum vs FirstEnergy's OWN published Ohio
@@ -28,8 +29,8 @@ function buildCrosscheck(prev, fe, feSumAll, feServedSum, cppOut){
   let pou = null;
   try { pou = JSON.parse(readFileSync(POU_PATH, "utf8")); } catch(e){}
   if(pou && pou.ok && pou.fetchedAt && (Date.now() - pou.fetchedAt) < POU_FRESH_MS && Array.isArray(pou.utilities)){
-    const feU  = pou.utilities.find(u => u.id === "121"  || /firstenergy/i.test(u.name));
-    const cppU = pou.utilities.find(u => u.id === "1468" || /cleveland public power/i.test(u.name));
+    const feU  = pou.utilities.find(u => u.id === POU_FE_ID  || /firstenergy/i.test(u.name));
+    const cppU = pou.utilities.find(u => u.id === POU_CPP_ID || /cleveland public power/i.test(u.name));
     poweroutage = {
       fetchedAt: pou.fetchedAt,
       updatedText: pou.updatedText || null,
@@ -42,12 +43,21 @@ function buildCrosscheck(prev, fe, feSumAll, feServedSum, cppOut){
   return { internal, poweroutage };
 }
 
+// Market configuration — adding a market is writing markets/<id>.json, not editing this file.
+// Select with the MARKET env var (default neo-ohio); the rest of the collector reads from here.
+const MARKET = process.env.MARKET || "neo-ohio";
+const market = JSON.parse(readFileSync(new URL(`../markets/${MARKET}.json`, import.meta.url), "utf8"));
+const feSource  = market.sources.find(s => s.adapter === "kubra");
+const cppSource = market.sources.find(s => s.adapter === "arcgis-cpp");
+const POU_FE_ID  = feSource  ? feSource.poweroutageId  : null;   // poweroutage.us utility ids (cross-check)
+const POU_CPP_ID = cppSource ? cppSource.poweroutageId : null;
+
 const KB = "https://kubra.io";
-const INSTANCE = "6c715f0e-bbec-465f-98cc-0b81623744be";
-const VIEW     = "db9c3f02-0a06-4672-a357-0f676eb75bfa";
-const NEO = new Set("CUYAHOGA LAKE GEAUGA ASHTABULA LORAIN MEDINA SUMMIT PORTAGE STARK WAYNE TRUMBULL MAHONING COLUMBIANA".split(" "));
-const CPP_WEBMAP = "88719296c67e4874b0bdd2abd91658b2";
-const CPP_FS0 = "https://services3.arcgis.com/dty2kHktVXHrqO8i/arcgis/rest/services/CPPFeederAreas_BufferXMBuff100v3/FeatureServer/0";
+const INSTANCE = feSource.config.instance;
+const VIEW     = feSource.config.view;
+const NEO = new Set(market.scope.counties);
+const CPP_WEBMAP = cppSource ? cppSource.config.webmap : null;
+const CPP_FS0    = cppSource ? cppSource.config.featureServer : null;
 
 const STATE_PATH = "data/state.json";
 const CAP_TOTAL = 1500, CAP_COUNTY = 1000, CAP_CITY = 96, MAX_CITIES = 300;
@@ -134,7 +144,7 @@ async function jget(url, extraHeaders = {}){
   }
   throw lastErr;
 }
-const KUBRA_HEADERS = { "Referer": "https://outages-oh.firstenergycorp.com/", "Origin": "https://outages-oh.firstenergycorp.com" };
+const KUBRA_HEADERS = { "Referer": feSource.config.referer, "Origin": new URL(feSource.config.referer).origin };
 const pushCapped = (arr, point, cap) => { arr.push(point); while(arr.length > cap) arr.shift(); return arr; };
 // Anomaly guard: customers-out can never be negative or exceed customers-served.
 const sane = (val, served) => { const o = (typeof val === "number" && isFinite(val)) ? Math.max(0, val) : 0; return served > 0 ? Math.min(o, served) : o; };
@@ -146,24 +156,8 @@ async function fetchFE(){
   const reps = conf.config.reports.data.interval_generation_data;
   const src = (reps.find(r=>/report\.json$/i.test(r.source)) || reps[0]).source;
   const report = await jget(`${KB}/${dataPath}/${src}`, KUBRA_HEADERS);
-  const st = report.file_data.areas[0];
-  const tot = report.file_data.totals || {};   // FirstEnergy's OWN published headline figures
-  const counties = (st.areas||[]).map(c => {
-    const served = c.cust_s || 0;
-    return {
-      name: c.name,
-      out: sane(c.cust_a && c.cust_a.val, served),
-      served, etr: c.etr || null, loc: centroid(c.gotoMap && c.gotoMap.bbox),
-      subs: (c.areas||[]).map(s => {
-        const ss = s.cust_s || 0;
-        return { id: s.areaId || (c.name+"|"+s.name), name: s.name,
-                 out: sane(s.cust_a && s.cust_a.val, ss), served: ss, etr: s.etr || null,
-                 loc: centroid(s.gotoMap && s.gotoMap.bbox) };
-      })
-    };
-  });
+  const { official, areas: counties } = parseKubraReport(report);   // adapters/kubra.mjs (golden-tested)
   if(!counties.length) throw new Error("empty report (no counties)");   // don't publish a blank snapshot
-  const official = { out: (tot.cust_a && tot.cust_a.val) || 0, served: tot.cust_s || 0, nOut: tot.n_out || 0 };
   const clusterTmpl = cs.data && cs.data.cluster_interval_generation_data;   // for the cause crawl
   return { updatedAt: cs.updatedAt || Date.now(), counties, official, clusterTmpl };
 }
@@ -185,7 +179,7 @@ async function fetchCauses(tmpl, totalCust){
       if(!r.ok) return []; const j = await r.json(); return Array.isArray(j.file_data) ? j.file_data : []; }
     catch(e){ return []; }
   };
-  const OHIO = [42.1123, -79.7766, 39.0936, -85.1123];   // N,E,S,W (FE OH service bbox)
+  const OHIO = market.geo.bbox;   // N,E,S,W service bbox (from markets/<id>.json)
   const Z0 = 6, BUDGET = 220, CONC = 8, MAXZ = 15, MIN_CLUSTER = 8;   // stop once only tiny clusters remain
   let pq = [];
   for(let x=lon2tileX(OHIO[3],Z0); x<=lon2tileX(OHIO[1],Z0); x++)
@@ -230,7 +224,7 @@ async function fetchCauses(tmpl, totalCust){
 // Observed daily max wind gust for NE Ohio (Cleveland), keyed by UTC day to match relTrend.
 // Open-Meteo: free, no key, mph. Used to annotate the reliability trend's storm days.
 async function fetchWind(){
-  const u = "https://api.open-meteo.com/v1/forecast?latitude=41.50&longitude=-81.69"
+  const u = `https://api.open-meteo.com/v1/forecast?latitude=${market.weather.lat}&longitude=${market.weather.lon}`
     + "&daily=wind_gusts_10m_max,wind_speed_10m_max&wind_speed_unit=mph&timezone=GMT&past_days=14&forecast_days=1";
   const d = await jget(u);
   const days = (d.daily && d.daily.time) || [];

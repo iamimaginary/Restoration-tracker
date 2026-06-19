@@ -2643,6 +2643,62 @@ scheduleAuto();
 setInterval(renderDataHealth, 30000);   // keep "snapshot age" current between refreshes
 showTab(location.hash.slice(1) || "now");
 tabReady = true;
+
+/* ---- feedback widget: capture REPRODUCIBLE context (market + snapshot time + view) so a Claude
+   agent can reproduce and act on a real user report — the "fixture" pattern applied to feedback.
+   Production: set window.FEEDBACK_ENDPOINT to a serverless intake that strips PII and opens a
+   labeled GitHub issue (also add that origin to the CSP connect-src). No endpoint → falls back to a
+   prefilled GitHub issue the user submits themselves. ---- */
+const MARKET_ID = "neo-ohio";        // single-market today; generalizes to the loaded market id
+const APP_VERSION = "2026.06.19";
+function initFeedback(){
+  const btn = document.getElementById("fbBtn"), panel = document.getElementById("fbPanel");
+  if(!btn || !panel) return;
+  const note = document.getElementById("fbCtxNote");
+  const hide = ()=>{ panel.style.display = "none"; };
+  const show = ()=>{ panel.style.display = "block";
+    note.textContent = `Attaches: market ${MARKET_ID}, snapshot ${snapshotAt?new Date(snapshotAt).toISOString():"n/a"}, view "${granularity}".`; };
+  btn.addEventListener("click", ()=> panel.style.display === "block" ? hide() : show());
+  document.getElementById("fbCancel").addEventListener("click", hide);
+  document.getElementById("fbSend").addEventListener("click", async ()=>{
+    const message = (document.getElementById("fbMsg").value || "").trim();
+    if(!message){ document.getElementById("fbMsg").focus(); return; }
+    const email = (document.getElementById("fbEmail").value || "").trim();
+    const ctx = { market: MARKET_ID, appVersion: APP_VERSION, snapshotAt: snapshotAt || null,
+      view: granularity, hash: location.hash, url: location.href, ua: navigator.userAgent, ts: Date.now() };
+    try {
+      if(window.FEEDBACK_ENDPOINT){
+        await fetch(window.FEEDBACK_ENDPOINT, { method:"POST", headers:{ "Content-Type":"application/json" },
+          body: JSON.stringify({ ...ctx, message, email: email || null }) });
+      } else {
+        const repo = window.FEEDBACK_REPO || "iamimaginary/Restoration-tracker";
+        const title = `[feedback] ${message.slice(0,60)}`;
+        const body = `${message}\n\n---\nContext (auto-captured):\n\`\`\`json\n${JSON.stringify(ctx, null, 2)}\n\`\`\``;
+        window.open(`https://github.com/${repo}/issues/new?labels=feedback,triage&title=${encodeURIComponent(title)}&body=${encodeURIComponent(body)}`, "_blank", "noopener");
+      }
+      panel.innerHTML = '<div style="padding:8px 2px">Thanks — sent. 🙌</div>';
+      setTimeout(hide, 1500);
+    } catch(e){ note.textContent = "Couldn't send — please try again."; }
+  });
+}
+// the widget markup follows this script, so bind after the DOM is parsed
+if(document.readyState !== "loading") initFeedback();
+else document.addEventListener("DOMContentLoaded", initFeedback);
 </script>
+<!-- feedback widget (see initFeedback in the script above) -->
+<div id="fbWrap" style="position:fixed;right:14px;bottom:14px;z-index:9999;font:13px/1.4 system-ui,sans-serif">
+  <button id="fbBtn" type="button" style="background:#1f6feb;color:#fff;border:0;border-radius:20px;padding:8px 14px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)">💬 Feedback</button>
+  <div id="fbPanel" role="dialog" aria-label="Send feedback" style="display:none;position:absolute;right:0;bottom:44px;width:300px;background:#fff;color:#111;border:1px solid #ccc;border-radius:10px;padding:12px;box-shadow:0 4px 16px rgba(0,0,0,.25)">
+    <div style="font-weight:600;margin-bottom:6px">Report a problem or request a market</div>
+    <textarea id="fbMsg" rows="4" placeholder="What looks wrong, or which city / utility should we add?" style="width:100%;box-sizing:border-box;resize:vertical"></textarea>
+    <input id="fbEmail" type="email" placeholder="email (optional, for a reply)" style="width:100%;box-sizing:border-box;margin-top:6px" />
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button id="fbCancel" type="button" style="background:#eee;color:#111;border:0;border-radius:6px;padding:6px 10px;cursor:pointer">Cancel</button>
+      <button id="fbSend" type="button" style="background:#1f6feb;color:#fff;border:0;border-radius:6px;padding:6px 10px;cursor:pointer">Send</button>
+    </div>
+    <div id="fbCtxNote" style="color:#666;font-size:11px;margin-top:6px"></div>
+  </div>
+</div>
+
 </body>
 </html>
