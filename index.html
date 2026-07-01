@@ -1006,11 +1006,10 @@ function rateInfo(series, out, peak, usePrior, t90, served){
   // rate that can exceed the customer base — e.g. 3,764 going out in ~16 min reads as
   // "~14,146 more out/hr" on only 4,940 served, which is impossible. No more customers can
   // lose (or regain) power per hour than could actually change state: restoring is bounded
-  // by those currently out, rising by those still powered (served − out).
-  if(served > 0){
-    const cap = ph > 0 ? out : (served - out);
-    if(Math.abs(ph) > cap) ph = ph < 0 ? -cap : cap;
-  }
+  // by those currently out (always known), rising by those still powered (served − out;
+  // only clampable when a served denominator exists, e.g. not for CPP's feeder estimates).
+  const cap = ph > 0 ? out : (served > 0 ? served - out : Infinity);
+  if(Math.abs(ph) > cap) ph = ph < 0 ? -cap : cap;
   if(Math.abs(ph) < Math.max(5, out * 0.01)) return { cls:"muted", kind:"holding", n };
   if(ph > 0){
     // observed hours-to-baseline at the recent linear pace, with a bounded deceleration correction:
