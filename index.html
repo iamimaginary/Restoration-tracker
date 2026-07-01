@@ -995,13 +995,21 @@ function postPeakCount(series){
   let c=0; for(let i=pk;i<series.length;i++) if(series[i].out>0) c++;
   return c;
 }
-function rateInfo(series, out, peak, usePrior, t90){
+function rateInfo(series, out, peak, usePrior, t90, served){
   usePrior = usePrior !== false;                    // FE areas blend a historical prior; CPP passes false
   const n = series ? series.length : 0;
   if(out <= 0) return { cls:"good", kind:"restored", n };
   const r = restorationRate(series);
   if(!r) return { cls:"muted", kind:"collecting", n };
-  const ph = r.perHour;
+  let ph = r.perHour;
+  // Physical clamp: a sudden jump measured over a short window extrapolates to a per-hour
+  // rate that can exceed the customer base — e.g. 3,764 going out in ~16 min reads as
+  // "~14,146 more out/hr" on only 4,940 served, which is impossible. No more customers can
+  // lose (or regain) power per hour than could actually change state: restoring is bounded
+  // by those currently out (always known), rising by those still powered (served − out;
+  // only clampable when a served denominator exists, e.g. not for CPP's feeder estimates).
+  const cap = ph > 0 ? out : (served > 0 ? served - out : Infinity);
+  if(Math.abs(ph) > cap) ph = ph < 0 ? -cap : cap;
   if(Math.abs(ph) < Math.max(5, out * 0.01)) return { cls:"muted", kind:"holding", n };
   if(ph > 0){
     // observed hours-to-baseline at the recent linear pace, with a bounded deceleration correction:
@@ -1068,9 +1076,9 @@ function ratePlain(series, out, peak){
 }
 // two stacked label/value rows for cards & popups: a "Restoration trend" row and,
 // when improving, a separate "App estimate" row on its own line.
-function rateRows(series, out, peak, rowCls, usePrior, t90){
+function rateRows(series, out, peak, rowCls, usePrior, t90, served){
   rowCls = rowCls || "row";
-  const i = rateInfo(series, out, peak, usePrior, t90);
+  const i = rateInfo(series, out, peak, usePrior, t90, served);
   let h = `<div class="${rowCls}"><span>Restoration trend</span><b><span style="color:${RATE_COLOR[i.cls]}">${RATE_ICON[i.kind]||""}${trendText(i)}</span></b></div>`;
   const p = estPhrase(i);
   if(p) h += `<div class="${rowCls}"><span>App estimate</span><b>${p}${algoTag(i)}</b></div>`;
@@ -1564,7 +1572,7 @@ function renderFirstEnergy(){
         <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
         <div class="row"><span>Currently out</span><b>${fmt(c.out)}</b></div>
         <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(store.countyHistory[c.name])}</b></div>
-        ${rateRows(store.countyHistory[c.name], c.out, store.peaks[c.name])}
+        ${rateRows(store.countyHistory[c.name], c.out, store.peaks[c.name], "row", undefined, undefined, c.served)}
         <div class="row"><span>Event peak / served</span><b>${fmt(peak)} / ${fmt(c.served)}</b></div>
         <div class="row"><span>Utility ETR</span><b>${esc(etrStr(c.etr))}</b></div>
         ${hasTrend ? `<div class="cspark-wrap"><span class="cspark-lbl">Customers out over time</span>
@@ -1690,7 +1698,7 @@ function openDetail(name, focusId){
   document.getElementById("d_title").textContent = titleCase(name) + " County";
   const active = (c.subs||[]).filter(s=>s.out>0);
   // stacked county header: source/confidence · count · utility ETR · app estimate · trend · freshness
-  const ci = rateInfo(store.countyHistory[name], c.out, store.peaks[name]);
+  const ci = rateInfo(store.countyHistory[name], c.out, store.peaks[name], undefined, undefined, c.served);
   const cEst = estText(ci).replace(/^App estimate:/, "Algorithmic estimate:");
   const hd = [
     `Source: FirstEnergy · ${esc(NEO[name]||"FirstEnergy")} · High confidence`,
@@ -1709,7 +1717,7 @@ function openDetail(name, focusId){
     const p = pctRestored(s.id, s.out);
     const peak = store.peaks[s.id]||0;
     const hasSpark = (store.cityHistory[s.id]||[]).length >= 2;
-    const i = rateInfo(store.cityHistory[s.id], s.out, store.peaks[s.id], true, areaT90(s.id));
+    const i = rateInfo(store.cityHistory[s.id], s.out, store.peaks[s.id], true, areaT90(s.id), s.served);
     const sev = s.served>0 ? (s.out/s.served*100) : null;
     const sevTxt = sev==null ? null : (sev<0.1 ? sev.toFixed(2) : sev<10 ? sev.toFixed(1) : Math.round(sev));
     const est = estText(i), chg = etrChangeLine(s.id), met = etrMetLine(s.id);
@@ -1786,7 +1794,7 @@ function outagePopup(name, out, served, etr, key, includeRel){
     `<div class="pp-row"><span>Currently out</span><b>${fmt(out)}</b></div>`+
     `<div class="pp-row"><span>Customers served</span><b>${fmt(served)}</b></div>`+
     `<div class="pp-row"><span>Recovered from event peak</span><b>${pctRestored(key,out)}%${peak?` · peak ${fmt(peak)}`:""}</b></div>`+
-    rateRows(series, out, peak, "pp-row", true, areaT90(key))+
+    rateRows(series, out, peak, "pp-row", true, areaT90(key), served)+
     `<div class="pp-row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>`+
     (rel ? `<div class="pp-row"><span>Reliability</span><b>${rel}</b></div>` : "")+
     `<div class="pp-row"><span>Source</span><b>FirstEnergy · High confidence</b></div>`;
@@ -2464,7 +2472,7 @@ function renderMyCity(){
     <div class="row"><span>Currently out</span><b>${fmt(out)} / ${fmt(served)} served</b></div>
     <div class="row"><span>Recovered from peak</span><b class="pct">${p}%</b></div>
     <div class="row"><span>Since last snapshot</span><b>${snapDeltaHtml(series)}</b></div>
-    ${rateRows(series, out, peak, "row", true, areaT90(key))}
+    ${rateRows(series, out, peak, "row", true, areaT90(key), served)}
     <div class="row"><span>Utility ETR</span><b>${esc(etrStr(etr))}</b></div>
     ${myCity.kind==="city" ? `<div class="sub-rel" style="margin-top:9px">${relLineHtml(key)}</div>` : ""}
   </div>`;
