@@ -2238,8 +2238,17 @@ function lineChart(canvas, data, color, emptyMsg, opts){
     for(let i=0;i<data.length-1;i++){ const a=data[i].t,b=data[i+1].t; if(t>=a&&t<=b) return x(i)+(x(i+1)-x(i))*((t-a)/((b-a)||1)); }
     return x(data.length-1);
   };
+  // Union overlapping/adjacent alert bands so each region's translucent fill is painted
+  // exactly once. Left un-merged, a multi-day storm logs many overlapping NWS alerts whose
+  // ~0.12-alpha fills stack into a near-opaque wash across the whole chart; each merged span
+  // takes its strongest severity's color/label.
+  const sevRank = s => /severe|extreme/i.test(s||"") ? 2 : /moderate/i.test(s||"") ? 1 : 0;
   const bands = (opts.bands||[]).map(bd=>({ from:Math.max(bd.from,data[0].t), to:Math.min(bd.to,data[data.length-1].t), sev:bd.sev, label:bd.label }))
-    .filter(bd=>bd.to>bd.from);
+    .filter(bd=>bd.to>bd.from)
+    .sort((a,b)=>a.from-b.from)
+    .reduce((acc,bd)=>{ const last=acc[acc.length-1];
+      if(last && bd.from<=last.to){ last.to=Math.max(last.to,bd.to); if(sevRank(bd.sev)>sevRank(last.sev)){ last.sev=bd.sev; last.label=bd.label; } }
+      else acc.push({...bd}); return acc; }, []);
   const bandColor = sev => /severe|extreme/i.test(sev||"") ? "rgba(231,76,60,0.14)" : /moderate/i.test(sev||"") ? "rgba(241,196,15,0.12)" : "rgba(148,163,184,0.10)";
 
   function paint(){
