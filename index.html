@@ -2584,6 +2584,9 @@ function showTab(name){
   });
   if(name === "map") setTimeout(()=>{ if(map){ map.invalidateSize(); drawMap(); if(causeOn) scheduleCauses(); } }, 30);
   if(name === "trends") setTimeout(()=>{ drawChart(); drawRelTrend(); }, 0);
+  // storm charts are canvas-sized from clientWidth, which is 0 while this tab is hidden;
+  // redraw once it's visible so they measure their real width instead of the 320×200 fallback.
+  if(name === "storms") setTimeout(()=>renderStormLog(), 0);
   if(location.hash.slice(1) !== name) history.replaceState(null, "", "#"+name);
   // keep the viewport exactly where it was — no scroll-to-top, no dip to re-pin the tab bar
   // (the tab bar is sticky, so it stays visible regardless). Restore guards against any
@@ -2653,6 +2656,7 @@ window.addEventListener("resize", ()=>{
   if(detailOpen) drawCountyChart(detailOpen);
   const cc = document.getElementById("cpp_chart");
   if(cc && latestCPP) lineChart(cc, store.cppHistory, PURPLE, "CPP trend builds as snapshots are collected.");
+  const st = document.getElementById("tab-storms"); if(st && st.classList.contains("on")) renderStormLog();
 });
 
 refresh(true);
